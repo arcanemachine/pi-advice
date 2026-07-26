@@ -9,6 +9,39 @@ This is the authoritative implementation plan for the initial `pi-advice` extens
 - This plan does not authorize implementation by itself. Begin implementation only after the user explicitly assigns execution.
 - Do not publish to npm or push Git repositories as part of this plan.
 
+## Amendment 1 — Safe pending-message restriction (Option B)
+
+Verified against Pi 0.82.1: after each awaited `turn_end` handler, Pi refreshes
+the next low-level turn's model, thinking, and tools from live agent state
+(`prepareNextTurn`), and only then emits `message_start` for the next drained
+steering message. Switching the model in `message_start` cannot affect that
+same turn, and the public extension API does not expose which message will
+drain next. Exact FIFO advisor activation *behind* earlier queued steering
+messages therefore cannot be made fail-closed without an upstream Pi capability.
+
+The user approved a safe behavioral restriction rather than an upstream change:
+
+- **Manual `/advice`:** if `ctx.hasPendingMessages()` is true, reject the request
+  with a concise message and do not queue an advisor prompt. The user can retry
+  once the queued steering work has drained.
+- **Automatic schedule:** at the turn threshold, if messages are pending,
+  saturate the counter at the threshold and defer; trigger as soon as the
+  steering queue is empty.
+- When advice **is** accepted, snapshot the advisee and activate the advisor
+  (set model/thinking/tools) **before** the advisor prompt is queued, so the
+  next-turn snapshot captures the advisor. Delivery is chosen by agent idle
+  state at send time: an idle agent sends the advisor prompt immediately; a
+  streaming agent queues it as steering. The advisee's in-flight turn finishes
+  under the advisee and is recognized by controller phase (not `ctx.model`); it
+  does not count and does not trigger advisor handling.
+- Restoration happens during the advisor's final `turn_end`, before Pi's
+  next-turn snapshot, so the continuation turn captures the restored advisee.
+
+This supersedes the earlier "do not switch models until this extension's advice
+user message is the next message being delivered" wording and the
+`Starting with earlier steering messages` FIFO-detection approach below, and
+resolves the `turn_end` snapshot and FIFO fail-closed stop conditions for V1.
+
 ## Objective
 
 Create a standalone Pi extension package that lets an **advisee** model temporarily hand the active conversation to a configured **advisor** model for a focused review, then automatically hands control back so the advisee continues the work using that advice.
@@ -55,8 +88,8 @@ A manual advice request behaves like a regular Pi steering message:
 1. If the advisee is idle and no earlier steering work is pending, begin the advice cycle immediately.
 2. If the advisee is streaming, let its current response and already-issued tool calls finish.
 3. Queue the advice request for delivery before a subsequent model call.
-4. Preserve Pi's existing FIFO steering order. Do not clear, reorder, or discard earlier user messages.
-5. Do not switch models until this extension's advice user message is the next message being delivered when earlier steering messages exist.
+4. If `ctx.hasPendingMessages()` is true, reject the request with a concise message and do not queue anything. The user can retry once the queued steering work has drained (Option B).
+5. Otherwise, snapshot the advisee and activate the advisor before queueing the advisor prompt, so the next-turn snapshot captures the advisor. Existing queued messages are never reordered or discarded.
 
 A second `/advice` while an advice cycle is queued or active must be rejected with a concise explanation. The advisor must never recursively advise itself.
 
@@ -69,7 +102,7 @@ The interval counts low-level Pi turns from the advisee:
 - Count every ordinary advisee `turn_end`, including responses that issue tool calls.
 - Trigger after the Nth counted advisee turn has completed its tool calls and tool results.
 - Insert the automatic advice request as a steering message before the advisee's next otherwise-unqueued model call.
-- Preserve existing steering-message FIFO order if user messages were already waiting.
+- If messages are pending at the threshold, saturate the counter at the threshold and defer; trigger as soon as the steering queue is empty (Option B).
 - Exclude all advisor turns from the interval.
 - Exclude the extension-generated advisee continuation turn from the interval. Once that initial continuation turn completes, later autonomous advisee turns count normally.
 - Manual `/advice` does not reset or otherwise change the automatic counter.
@@ -402,32 +435,26 @@ Names may vary, but the invariants must not.
 When Pi is idle and no earlier steering work is pending:
 
 1. Validate advisor config/model/authentication.
-2. Snapshot and activate the advisor.
-3. Send the advisor user message immediately.
+2. Snapshot the advisee and activate the advisor.
+3. Send the advisor user message immediately; the run it starts captures the advisor configuration.
 
 ### Starting while streaming without an earlier queue
 
 Extension commands execute immediately during streaming. For a manual request with no earlier pending messages:
 
 1. Validate advisor availability.
-2. Capture/activate advisor state for the next model call.
+2. Snapshot the advisee and activate the advisor (set model/thinking/tools) before queueing, so the next-turn snapshot captures the advisor.
 3. Queue the advisor user message with `deliverAs: "steer"`.
-4. Let the current advisee response and its tool batch finish.
+4. Let the current advisee response and its tool batch finish; its `turn_end` is ignored by phase and does not count.
 5. The queued advice message becomes the next user input and the advisor makes the next model call.
+
+If the in-flight turn ends while activation is still in flight, the advisor prompt is simply sent once activation completes — immediately if the agent has since gone idle, or as a steer otherwise. Either way the advisor runs under the activated advisor configuration.
 
 Pi documents that active-tool changes take effect on the next agent turn; do not interfere with already-issued tool execution.
 
-### Starting with earlier steering messages
+### Starting with earlier steering messages (Option B)
 
-If `ctx.hasPendingMessages()` is true before queuing advice:
-
-1. Validate advisor availability without prematurely changing the active model or tools.
-2. Store a pending advice-cycle record and queue the advisor message as steering input.
-3. Let the advisee process earlier FIFO steering messages.
-4. Detect delivery of this extension's exact advisor user message through the awaited message lifecycle.
-5. Immediately before its model turn, snapshot the then-current advisee state and activate the advisor.
-
-The implementer must verify this boundary with deterministic tests against Pi's event order. Fail closed if advisor activation cannot complete: abort or prevent the wrongly modeled request where supported, restore state, and notify rather than allowing the advisee to masquerade as the advisor.
+If `ctx.hasPendingMessages()` is true before queuing manual advice, reject the request with a concise message and do not queue anything. The user can retry once the queued steering work has drained. Exact FIFO activation behind earlier queued steering messages is not attempted; see Amendment 1.
 
 ### Automatic threshold
 

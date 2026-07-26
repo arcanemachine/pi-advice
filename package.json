@@ -1,0 +1,65 @@
+{
+  "name": "@arcanemachine/pi-advice",
+  "version": "0.1.0",
+  "description": "Invite a configured advisor model to review an advisee's work, then hand control back so the advisee continues using that advice.",
+  "type": "module",
+  "keywords": [
+    "pi",
+    "pi-coding-agent",
+    "pi-extension",
+    "pi-package",
+    "advice",
+    "advisor",
+    "review"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "watch": "tsc --noEmit --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" package.json README.md AGENTS.md CHANGELOG.md",
+    "prepublishOnly": "npm run typecheck && npm run test"
+  },
+  "author": "Nicholas Moen",
+  "license": "MIT",
+  "files": [
+    "src",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arcanemachine/pi-advice.git"
+  },
+  "homepage": "https://github.com/arcanemachine/pi-advice#readme",
+  "bugs": {
+    "url": "https://github.com/arcanemachine/pi-advice/issues"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.82.1",
+    "@types/node": "^25.3.3",
+    "prettier": "^3.8.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.6"
+  }
+}
