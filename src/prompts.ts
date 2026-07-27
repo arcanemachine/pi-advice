@@ -14,31 +14,34 @@ export interface AdvisorPromptInput {
 }
 
 const BASE_REVIEW = [
-  "You are the advisor. The conversation already in this session is the work of the advisee.",
-  "Review how the advisee's work is going right now.",
+  "Take a fresh look to analyze the current situation.",
   "",
   "Assess:",
-  "- how the work is going overall;",
-  "- what the advisee is doing well;",
-  "- mistakes, weak assumptions, omissions, unnecessary work, risks, and better approaches.",
+  "- How the work is going overall",
+  "- What the advisee is doing well",
+  "- Mistakes, weak assumptions, omissions, unnecessary work, risks, and better approaches",
   "",
-  "Act as an advisor, not as the implementer. Do not take over the work.",
+  "Give yourself advice, but do not take over the work.",
+  "",
   "Include every materially useful point, but avoid padding, repetition, and unnecessary verbosity.",
+  "",
   "Finish with a clearly labeled section:",
   "",
-  "Recommended next action for the advisee:",
-  "<one concrete next action>;",
+  "Recommended next action(s):",
+  "",
+  "<one concrete next action for each point requested by the advisee>",
 ].join("\n");
 
 const TOOL_FREE_RULES = [
-  "You have no tools available. Do not call or request tools.",
-  "Answer from the conversation context already present in the session.",
+  "",
+  "I have no tools available. Do not call or request tools. Produce a single message with as much information as is necessary to clearly get the point across. Answer from the conversation context already present in the session.",
+  "",
 ].join("\n");
 
 const TOOL_ENABLED_RULES = [
-  "You may use the advisee's active tools, but only to investigate so your advice is grounded.",
-  "Make the minimum reasonable number of tool calls needed to be effective, then return your advice.",
-  "Do not modify the project, execute the plan, or perform the advisee's work. Tool access is for investigation supporting advice only.",
+  "",
+  "I may use the available tools, but only to investigate so my advice is grounded. I must make the minimum reasonable number of tool calls needed to be effective, then return my advice.",
+  "",
 ].join("\n");
 
 /**
