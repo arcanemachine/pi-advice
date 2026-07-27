@@ -25,7 +25,7 @@ export interface AdviceConfig {
 }
 
 /** Raw JSON shape used while parsing; all fields are optional until validated. */
-interface RawAdviceConfig {
+export interface RawAdviceConfig {
   provider?: unknown;
   model?: unknown;
   thinkingLevel?: unknown;
@@ -44,6 +44,19 @@ export interface LoadConfigError {
 export type ConfigResult = LoadConfigResult | LoadConfigError;
 
 const DEFAULT_THINKING_LEVEL: ThinkingLevel = "high";
+const KNOWN_KEYS = new Set<keyof RawAdviceConfig>([
+  "provider",
+  "model",
+  "thinkingLevel",
+]);
+
+/** Validated fields from a single source, plus any errors found before merge. */
+export interface ValidatedPartial {
+  provider?: string;
+  model?: string;
+  thinkingLevel?: ThinkingLevel;
+  errors: string[];
+}
 
 function isString(value: unknown): value is string {
   return typeof value === "string";
@@ -56,10 +69,67 @@ function isThinkingLevel(value: unknown): value is ThinkingLevel {
   );
 }
 
+function describe(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Validate one configuration source before merging. Unknown keys and wrong
+ * types are rejected with a path-specific label so the diagnostic names the
+ * file that contains the problem.
+ */
+export function validateRawConfig(
+  raw: unknown,
+  sourceLabel: string,
+): ValidatedPartial {
+  const result: ValidatedPartial = { errors: [] };
+
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    result.errors.push(`${sourceLabel}: config must be a JSON object`);
+    return result;
+  }
+
+  const obj = raw as Record<string, unknown>;
+  for (const key of Object.keys(obj)) {
+    if (!KNOWN_KEYS.has(key as keyof RawAdviceConfig)) {
+      result.errors.push(`${sourceLabel}: unknown key "${key}"`);
+    }
+  }
+
+  if (obj.provider !== undefined) {
+    if (!isString(obj.provider) || obj.provider.trim() === "") {
+      result.errors.push(
+        `${sourceLabel}: "provider" must be a non-empty string`,
+      );
+    } else {
+      result.provider = obj.provider;
+    }
+  }
+
+  if (obj.model !== undefined) {
+    if (!isString(obj.model) || obj.model.trim() === "") {
+      result.errors.push(`${sourceLabel}: "model" must be a non-empty string`);
+    } else {
+      result.model = obj.model;
+    }
+  }
+
+  if (obj.thinkingLevel !== undefined) {
+    if (!isThinkingLevel(obj.thinkingLevel)) {
+      result.errors.push(
+        `${sourceLabel}: "thinkingLevel" must be one of ${THINKING_LEVELS.join(", ")}`,
+      );
+    } else {
+      result.thinkingLevel = obj.thinkingLevel;
+    }
+  }
+
+  return result;
+}
+
 /**
  * Merge raw global and project configuration. Project fields override matching
- * global fields. Only known fields participate; this helper does not validate
- * types, it only combines what was present on disk.
+ * global fields. Only known fields participate.
  */
 export function mergeConfig(
   global: RawAdviceConfig | undefined,
@@ -79,7 +149,7 @@ export function mergeConfig(
 /**
  * Validate a merged raw config and produce an {@link AdviceConfig}.
  *
- * Validation is intentionally strict: malformed values are rejected with a
+ * Validation is strict: malformed values and unknown keys are rejected with a
  * path-specific message rather than silently coerced. `thinkingLevel` defaults
  * to "high" only when omitted; a present-but-invalid value is an error.
  */
@@ -88,6 +158,19 @@ export function validateConfig(
   sourceLabel: string,
 ): ConfigResult {
   const errors: string[] = [];
+
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return {
+      ok: false,
+      error: `${sourceLabel}: config must be a JSON object`,
+    };
+  }
+
+  for (const key of Object.keys(raw)) {
+    if (!KNOWN_KEYS.has(key as keyof RawAdviceConfig)) {
+      errors.push(`${sourceLabel}: unknown key "${key}"`);
+    }
+  }
 
   if (!isString(raw.provider) || raw.provider.trim() === "") {
     errors.push(`${sourceLabel}: "provider" must be a non-empty string`);
@@ -121,36 +204,92 @@ export function validateConfig(
   };
 }
 
-function readJsonFile(path: string): RawAdviceConfig | undefined {
-  if (!existsSync(path)) return undefined;
+type ReadResult =
+  | { ok: true; present: true; data: unknown }
+  | { ok: true; present: false }
+  | { ok: false; error: string };
+
+function readJsonFile(path: string): ReadResult {
+  if (!existsSync(path)) {
+    return { ok: true, present: false };
+  }
   let content: string;
   try {
     content = readFileSync(path, "utf-8");
   } catch (err) {
-    throw new Error(`${path}: unable to read config file (${describe(err)})`);
+    return {
+      ok: false,
+      error: `${path}: unable to read config file (${describe(err)})`,
+    };
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(content);
   } catch (err) {
-    throw new Error(`${path}: malformed JSON (${describe(err)})`);
+    return {
+      ok: false,
+      error: `${path}: malformed JSON (${describe(err)})`,
+    };
   }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`${path}: config must be a JSON object`);
-  }
-  return parsed as RawAdviceConfig;
+  return { ok: true, present: true, data: parsed };
 }
 
-function describe(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+/**
+ * Load and merge advisor configuration from explicit file paths.
+ *
+ * This is the test seam for config loading: callers provide isolated paths for
+ * the global and project files and the trust flag, so tests do not depend on
+ * the developer's real home directory.
+ */
+export function loadConfigFromPaths(
+  globalPath: string,
+  projectPath: string,
+  isProjectTrusted: boolean,
+): ConfigResult {
+  const globalRead = readJsonFile(globalPath);
+  if (!globalRead.ok) {
+    return { ok: false, error: globalRead.error };
+  }
+  const globalValidated = globalRead.present
+    ? validateRawConfig(globalRead.data, "global")
+    : undefined;
+
+  let projectValidated: ValidatedPartial | undefined;
+  if (isProjectTrusted) {
+    const projectRead = readJsonFile(projectPath);
+    if (!projectRead.ok) {
+      return { ok: false, error: projectRead.error };
+    }
+    projectValidated = projectRead.present
+      ? validateRawConfig(projectRead.data, "project")
+      : undefined;
+  }
+
+  const allErrors = [
+    ...(globalValidated?.errors ?? []),
+    ...(projectValidated?.errors ?? []),
+  ];
+  if (allErrors.length > 0) {
+    return { ok: false, error: allErrors.join("; ") };
+  }
+
+  const merged = mergeConfig(
+    globalValidated as RawAdviceConfig,
+    projectValidated as RawAdviceConfig,
+  );
+  const sourceLabel = projectValidated
+    ? "merged global + trusted-project"
+    : "global";
+  return validateConfig(merged, sourceLabel);
 }
 
 /**
  * Load and merge advisor configuration.
  *
  * Reads the global file always, and the project file only when the project is
- * trusted. The two sources are merged, then validated together so a project can
- * supply only the fields it overrides (e.g. just `model`).
+ * trusted. Each source is validated before merging so that malformed values and
+ * unknown keys in one file are reported even when the other file would override
+ * the same field.
  *
  * Filesystem and JSON errors are returned as an `ok: false` result with a
  * diagnostic string so command handlers can notify concisely instead of
@@ -162,22 +301,7 @@ export function loadConfig(
 ): ConfigResult {
   const globalPath = joinPathSafe(getAgentDir(), "pi-advice.json");
   const projectPath = joinPathSafe(cwd, CONFIG_DIR_NAME, "pi-advice.json");
-
-  let globalRaw: RawAdviceConfig | undefined;
-  let projectRaw: RawAdviceConfig | undefined;
-
-  try {
-    globalRaw = readJsonFile(globalPath);
-    if (isProjectTrusted) {
-      projectRaw = readJsonFile(projectPath);
-    }
-  } catch (err) {
-    return { ok: false, error: describe(err) };
-  }
-
-  const merged = mergeConfig(globalRaw, projectRaw);
-  const sourceLabel = projectRaw ? "merged global + trusted-project" : "global";
-  return validateConfig(merged, sourceLabel);
+  return loadConfigFromPaths(globalPath, projectPath, isProjectTrusted);
 }
 
 /** join() wrapper kept tiny so the getAgentDir() import stays explicit and testable. */

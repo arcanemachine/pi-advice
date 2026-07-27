@@ -1,7 +1,7 @@
 {
   "name": "@arcanemachine/pi-advice",
   "version": "0.1.0",
-  "description": "Invite a configured advisor model to review an advisee's work, then hand control back so the advisee continues using that advice.",
+  "description": "Step back from current work to reconsider it with a configured model, then continue the same work.",
   "type": "module",
   "keywords": [
     "pi",
@@ -21,9 +21,10 @@
     "build": "tsc --noEmit",
     "watch": "tsc --noEmit --watch",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --root .",
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" package.json README.md AGENTS.md CHANGELOG.md",
-    "prepublishOnly": "npm run typecheck && npm run test"
+    "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\" package.json README.md AGENTS.md CHANGELOG.md",
+    "prepublishOnly": "npm run format:check && npm run typecheck && npm run test && npm run build"
   },
   "author": "Nicholas Moen",
   "license": "MIT",

@@ -1,15 +1,20 @@
-import { beforeEach, describe, expect, it } from "vitest";
 import type {
   MessageStartEvent,
   SessionShutdownEvent,
   SessionStartEvent,
   TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   AdviceController,
+  CONTINUATION_MESSAGE_TYPE,
+  REVIEW_MESSAGE_TYPE,
   type AdviceDeps,
   type AdvisorModel,
+  type HiddenMessage,
+  type HiddenMessageOptions,
+  type Phase,
 } from "../src/advice-controller.js";
 import type { ConfigResult } from "../src/config.js";
 import { resetProcessState } from "../src/process-state.js";
@@ -24,23 +29,13 @@ const ADVISEE = {
   id: "claude-sonnet-4-5",
 } as unknown as AdvisorModel;
 
+type SwitchBehavior = "ok" | "false" | "throw" | "mutate-throw";
+
 interface SentMessage {
-  content: string;
-  deliverAs?: "steer";
+  message: HiddenMessage;
+  options: HiddenMessageOptions;
 }
 
-/**
- * Runtime-faithful harness.
- *
- * `live` is mutable agent state (model/thinking/tools) changed by the deps
- * setters. `loop` is the snapshot captured for the NEXT assistant turn: it is
- * refreshed from `live` when a new run starts (an immediate sendUserMessage,
- * mirroring createContextSnapshot) and again after each awaited `turn_end`
- * handler (mirroring prepareNextTurn). An assistant turn therefore runs under
- * `loop`, and its recorded provider/model reflect `loop` at that moment — so a
- * turn whose recorded model differs from the (already-switched) live model is
- * classified correctly by controller phase, exactly as in Pi.
- */
 class RuntimeHarness {
   live = {
     model: ADVISEE as AdvisorModel,
@@ -50,7 +45,7 @@ class RuntimeHarness {
   loop = { ...this.live, tools: [...this.live.tools] };
   idle = true;
   userPending = 0;
-  ourQueue: string[] = [];
+  customQueue: HiddenMessage[] = [];
 
   config: ConfigResult = {
     ok: true,
@@ -62,8 +57,9 @@ class RuntimeHarness {
   };
   advisor: AdvisorModel | undefined = ADVISOR;
   hasAuthFlag = true;
-  setModelResult = true;
-  setModelAdviseeResult = true;
+  advisorSwitch: SwitchBehavior = "ok";
+  adviseeSwitch: SwitchBehavior = "ok";
+  afterAdvisorSwitch: (() => void) | undefined;
   sessionId = "sess-1";
 
   sent: SentMessage[] = [];
@@ -71,7 +67,6 @@ class RuntimeHarness {
   thinkingSet: ThinkingLevel[] = [];
   toolsSet: string[][] = [];
   notifies: { message: string; level: NotifyLevel }[] = [];
-
   controller!: AdviceController;
 
   reset(): void {
@@ -84,7 +79,7 @@ class RuntimeHarness {
     this.loop = { ...this.live, tools: [...this.live.tools] };
     this.idle = true;
     this.userPending = 0;
-    this.ourQueue = [];
+    this.customQueue = [];
     this.config = {
       ok: true,
       config: {
@@ -95,8 +90,9 @@ class RuntimeHarness {
     };
     this.advisor = ADVISOR;
     this.hasAuthFlag = true;
-    this.setModelResult = true;
-    this.setModelAdviseeResult = true;
+    this.advisorSwitch = "ok";
+    this.adviseeSwitch = "ok";
+    this.afterAdvisorSwitch = undefined;
     this.sessionId = "sess-1";
     this.sent = [];
     this.setModelCalls = [];
@@ -109,17 +105,23 @@ class RuntimeHarness {
   get deps(): AdviceDeps {
     return {
       loadConfig: () => this.config,
-      findAdvisor: (_p, _m) => this.advisor,
+      findAdvisor: () => this.advisor,
       hasAuth: () => this.hasAuthFlag,
       getAdviseeModel: () => this.live.model,
       getThinking: () => this.live.thinking,
       getActiveTools: () => [...this.live.tools],
       setModel: async (model) => {
         this.setModelCalls.push(model);
-        const ok =
-          model === ADVISOR ? this.setModelResult : this.setModelAdviseeResult;
-        if (ok) this.live.model = model;
-        return ok;
+        const behavior =
+          model === ADVISOR ? this.advisorSwitch : this.adviseeSwitch;
+        if (behavior === "ok") this.live.model = model;
+        if (behavior === "mutate-throw") {
+          this.live.model = model;
+          throw new Error("switch exploded after mutation");
+        }
+        if (behavior === "throw") throw new Error("switch exploded");
+        if (model === ADVISOR) this.afterAdvisorSwitch?.();
+        return behavior === "ok";
       },
       setThinking: (level) => {
         this.live.thinking = level;
@@ -127,65 +129,52 @@ class RuntimeHarness {
       },
       setActiveTools: (names) => {
         this.live.tools = [...names];
-        this.toolsSet.push(names);
+        this.toolsSet.push([...names]);
       },
-      sendUserMessage: (content, opts) => {
-        this.sent.push({ content, deliverAs: opts?.deliverAs });
-        if (opts?.deliverAs === "steer") {
-          this.ourQueue.push(content);
-        } else {
-          // A new run starts: snapshot live for the next turn (createContextSnapshot).
+      sendMessage: (message, options) => {
+        this.sent.push({ message, options });
+        this.customQueue.push(message);
+        if (this.idle && options.triggerTurn) {
           this.loop = {
             model: this.live.model,
             thinking: this.live.thinking,
             tools: [...this.live.tools],
           };
           this.idle = false;
-          this.ourQueue.push(content);
         }
       },
       isIdle: () => this.idle,
       hasPendingMessages: () => this.userPending > 0,
-      notify: (message, level) => {
-        this.notifies.push({ message, level });
-      },
+      notify: (message, level) => this.notifies.push({ message, level }),
       getSessionId: () => this.sessionId,
     };
   }
 
-  /** Deliver a user message (advisor prompt, continuation, or a user steer) to the controller. */
-  async deliver(text: string): Promise<void> {
+  async deliverNext(): Promise<HiddenMessage> {
+    const message = this.customQueue.shift();
+    if (!message) throw new Error("harness: no custom message queued");
+    await this.controller.onMessageStart(customStart(message));
+    return message;
+  }
+
+  async deliverUser(text: string): Promise<void> {
     await this.controller.onMessageStart(userStart(text));
   }
 
-  /** Deliver the next prompt this extension queued (advisor or continuation). */
-  async deliverNext(): Promise<void> {
-    const text = this.ourQueue.shift();
-    if (text === undefined)
-      throw new Error("harness: nothing queued to deliver");
-    await this.deliver(text);
-  }
-
-  /**
-   * Run an assistant turn under the current `loop` snapshot, then refresh `loop`
-   * from `live` (prepareNextTurn, after the awaited turn_end handler).
-   */
-  async runTurn(opts: {
+  async runTurn(options: {
     stopReason: "stop" | "length" | "toolUse" | "error" | "aborted";
     text?: string;
     provider?: string;
     model?: string;
   }): Promise<void> {
-    const provider = opts.provider ?? this.loop.model.provider;
-    const model = opts.model ?? this.loop.model.id;
-    const text = opts.text ?? "ok";
-    const ev = makeTurnEnd({
-      provider,
-      model,
-      stopReason: opts.stopReason,
-      text,
-    });
-    await this.controller.onTurnEnd(ev);
+    await this.controller.onTurnEnd(
+      makeTurnEnd({
+        provider: options.provider ?? this.loop.model.provider,
+        model: options.model ?? this.loop.model.id,
+        stopReason: options.stopReason,
+        text: options.text ?? "ok",
+      }),
+    );
     this.loop = {
       model: this.live.model,
       thinking: this.live.thinking,
@@ -197,21 +186,28 @@ class RuntimeHarness {
     return this.notifies.at(-1);
   }
 
-  /** Current controller phase, exposed for concise assertions. */
-  getPhaseFromController():
-    | "idle"
-    | "adviceQueued"
-    | "advisorActive"
-    | "continuationQueued"
-    | "adviseeContinuing" {
+  phase(): Phase {
     return this.controller.getPhase();
   }
 }
 
 function setup(): RuntimeHarness {
-  const h = new RuntimeHarness();
-  h.reset();
-  return h;
+  const harness = new RuntimeHarness();
+  harness.reset();
+  return harness;
+}
+
+function customStart(message: HiddenMessage): MessageStartEvent {
+  return {
+    type: "message_start",
+    message: {
+      role: "custom",
+      customType: message.customType,
+      content: message.content,
+      display: message.display,
+      timestamp: Date.now(),
+    },
+  } as unknown as MessageStartEvent;
 }
 
 function userStart(text: string): MessageStartEvent {
@@ -225,23 +221,22 @@ function userStart(text: string): MessageStartEvent {
   } as unknown as MessageStartEvent;
 }
 
-interface TurnEndOpts {
+function makeTurnEnd(options: {
   provider: string;
   model: string;
   stopReason: "stop" | "length" | "toolUse" | "error" | "aborted";
   text: string;
-}
-
-function makeTurnEnd(opts: TurnEndOpts): TurnEndEvent {
+}): TurnEndEvent {
   return {
     type: "turn_end",
     turnIndex: 0,
     message: {
       role: "assistant",
-      content: opts.text === "" ? [] : [{ type: "text", text: opts.text }],
-      provider: opts.provider,
-      model: opts.model,
-      stopReason: opts.stopReason,
+      content:
+        options.text === "" ? [] : [{ type: "text", text: options.text }],
+      provider: options.provider,
+      model: options.model,
+      stopReason: options.stopReason,
       usage: {} as never,
       timestamp: Date.now(),
     },
@@ -249,519 +244,485 @@ function makeTurnEnd(opts: TurnEndOpts): TurnEndEvent {
   } as unknown as TurnEndEvent;
 }
 
-describe("manual advice (idle)", () => {
-  it("runs a tool-free cycle: activate advisor, restore advisee, continue", async () => {
-    const h = setup();
-    h.idle = true;
-    h.live.thinking = "medium";
-    h.live.tools = ["read", "bash"];
+beforeEach(() => resetProcessState());
 
-    await h.controller.handleAdvice("");
-    // Activation happened before the advisor prompt was delivered.
-    expect(h.setModelCalls).toEqual([ADVISOR]);
-    expect(h.thinkingSet).toEqual(["high"]);
-    expect(h.toolsSet).toEqual([[]]);
-    expect(h.getPhaseFromController()).toBe("advisorActive");
-    expect(h.sent[0].deliverAs).toBeUndefined();
-    expect(h.sent[0].content).toContain("You are the advisor.");
-    // loop snapshotted the advisor when the immediate run started.
-    expect(h.loop.model).toBe(ADVISOR);
+describe("manual /advise", () => {
+  it("runs an idle tool-free cycle with hidden messages and exact notification", async () => {
+    const harness = setup();
+    harness.live.tools = ["read", "bash"];
 
-    await h.deliverNext(); // advisor prompt message_start (already advisorActive)
-    expect(h.getPhaseFromController()).toBe("advisorActive");
+    await harness.controller.handleAdvise("");
 
-    await h.runTurn({ stopReason: "stop", text: "try X" });
-    expect(h.setModelCalls).toEqual([ADVISOR, ADVISEE]);
-    expect(h.thinkingSet).toEqual(["high", "medium"]);
-    expect(h.toolsSet).toEqual([[], ["read", "bash"]]);
-    expect(h.sent[1].content).toContain("You are the advisee.");
-    expect(h.sent[1].deliverAs).toBe("steer");
-    expect(h.getPhaseFromController()).toBe("continuationQueued");
+    expect(harness.setModelCalls).toEqual([ADVISOR]);
+    expect(harness.thinkingSet).toEqual(["high"]);
+    expect(harness.toolsSet).toEqual([[]]);
+    expect(harness.phase()).toBe("advisorActive");
+    expect(harness.loop.model).toBe(ADVISOR);
+    expect(harness.lastNotify()).toEqual({
+      message: "Advising...",
+      level: "info",
+    });
+    expect(harness.sent[0]).toEqual({
+      message: {
+        customType: REVIEW_MESSAGE_TYPE,
+        content: expect.any(String),
+        display: false,
+      },
+      options: { triggerTurn: true, deliverAs: "steer" },
+    });
 
-    await h.deliverNext();
-    expect(h.getPhaseFromController()).toBe("adviseeContinuing");
+    const review = await harness.deliverNext();
+    expect(review.content).toContain("Recommended next action(s):");
+    await harness.runTurn({ stopReason: "stop", text: "I just realized X." });
 
-    await h.runTurn({ stopReason: "stop", text: "doing it" });
-    expect(h.getPhaseFromController()).toBe("idle");
-    expect(h.controller.hasCycle()).toBe(false);
-    // The continuation turn ran under the restored advisee.
-    expect(h.loop.model).toBe(ADVISEE);
+    expect(harness.setModelCalls).toEqual([ADVISOR, ADVISEE]);
+    expect(harness.thinkingSet).toEqual(["high", "medium"]);
+    expect(harness.toolsSet).toEqual([[], ["read", "bash"]]);
+    expect(harness.phase()).toBe("continuationQueued");
+    expect(harness.sent[1]).toEqual({
+      message: {
+        customType: CONTINUATION_MESSAGE_TYPE,
+        content: expect.any(String),
+        display: false,
+      },
+      options: { triggerTurn: true, deliverAs: "steer" },
+    });
+
+    await harness.deliverNext();
+    expect(harness.phase()).toBe("adviseeContinuing");
+    await harness.runTurn({ stopReason: "stop", text: "acting on it" });
+    expect(harness.phase()).toBe("idle");
+    expect(harness.controller.hasCycle()).toBe(false);
+    expect(harness.loop.model).toBe(ADVISEE);
   });
 
-  it("preserves the advisee tool set in tool-enabled mode", async () => {
-    const h = setup();
-    h.live.tools = ["read", "bash", "edit", "write"];
-    await h.controller.handleAdvice("--tools inspect src");
-    expect(h.getPhaseFromController()).toBe("advisorActive");
-    expect(h.toolsSet[0]).toEqual(["read", "bash", "edit", "write"]);
-    expect(h.sent[0].content).toContain(
-      "investigate so your advice is grounded",
+  it("uses the trimmed focus in the exact start notification", async () => {
+    const harness = setup();
+    await harness.controller.handleAdvise("  focus on the race  ");
+    expect(harness.lastNotify()).toEqual({
+      message: "Advising: focus on the race",
+      level: "info",
+    });
+  });
+
+  it("preserves the exact active tools only with --tools", async () => {
+    const harness = setup();
+    await harness.controller.handleAdvise("--tools inspect src");
+    expect(harness.toolsSet[0]).toEqual(["read", "bash", "edit", "write"]);
+    expect(harness.sent[0]?.message.content).toContain(
+      "minimum reasonable number of tool calls",
     );
   });
 
-  it("rejects an overlapping request without sending", async () => {
-    const h = setup();
-    h.idle = true;
-    await h.controller.handleAdvice("");
-    expect(h.sent).toHaveLength(1);
-    await h.controller.handleAdvice("");
-    expect(h.sent).toHaveLength(1);
-    expect(h.lastNotify()?.level).toBe("warning");
-    expect(h.lastNotify()?.message).toMatch(/already active/);
+  it("rejects overlap", async () => {
+    const harness = setup();
+    await harness.controller.handleAdvise("");
+    await harness.controller.handleAdvise("");
+    expect(harness.sent).toHaveLength(1);
+    expect(harness.lastNotify()?.message).toMatch(/already active/);
+  });
+
+  it("rejects initial pending steering without activation or notification", async () => {
+    const harness = setup();
+    harness.userPending = 1;
+    await harness.controller.handleAdvise("");
+    expect(harness.sent).toEqual([]);
+    expect(harness.setModelCalls).toEqual([]);
+    expect(harness.notifies).toHaveLength(1);
+    expect(harness.lastNotify()?.message).toContain("/advise");
+  });
+
+  it("rechecks pending steering after async activation and restores", async () => {
+    const harness = setup();
+    harness.afterAdvisorSwitch = () => {
+      harness.userPending = 1;
+    };
+    await harness.controller.handleAdvise("focus");
+    expect(harness.setModelCalls).toEqual([ADVISOR, ADVISEE]);
+    expect(harness.sent).toEqual([]);
+    expect(harness.phase()).toBe("idle");
+    expect(harness.notifies).toHaveLength(1);
+    expect(harness.lastNotify()?.message).toMatch(/cancelled/);
   });
 });
 
-describe("manual advice (streaming) and FIFO boundary", () => {
-  it("queues as steer and activates the advisor before delivery", async () => {
-    const h = setup();
-    h.idle = false; // advisee is streaming its in-flight turn
-    h.loop = { ...h.live, tools: [...h.live.tools] }; // in-flight turn snapshotted as advisee
+describe("streaming and snapshot boundary", () => {
+  it("activates before queueing while the frozen tail turn remains original", async () => {
+    const harness = setup();
+    harness.idle = false;
+    harness.loop = { ...harness.live, tools: [...harness.live.tools] };
 
-    await h.controller.handleAdvice("");
-    expect(h.sent[0].deliverAs).toBe("steer");
-    expect(h.getPhaseFromController()).toBe("adviceQueued");
-    expect(h.setModelCalls).toEqual([ADVISOR]); // activated before queueing
-    expect(h.thinkingSet).toEqual(["high"]);
-    expect(h.toolsSet).toEqual([[]]);
-    expect(h.ourQueue).toHaveLength(1);
+    await harness.controller.handleAdvise("");
+    expect(harness.phase()).toBe("adviceQueued");
+    expect(harness.setModelCalls).toEqual([ADVISOR]);
+    expect(harness.loop.model).toBe(ADVISEE);
 
-    // The in-flight advisee turn finishes. It ran under the advisee (loop was
-    // advisee even though live is now the advisor) and must NOT be treated as
-    // an advisor turn or counted.
-    expect(h.loop.model).toBe(ADVISEE);
-    await h.runTurn({ stopReason: "stop", text: "advisee tail work" });
-    expect(h.setModelCalls).toEqual([ADVISOR]); // no extra model switch
-    expect(h.getPhaseFromController()).toBe("adviceQueued");
-    expect(h.loop.model).toBe(ADVISOR); // prepareNextTurn snapshotted the advisor
+    await harness.runTurn({ stopReason: "stop", text: "tail" });
+    expect(harness.phase()).toBe("adviceQueued");
+    expect(harness.loop.model).toBe(ADVISOR);
 
-    // Now the queued advisor prompt is delivered and the advisor runs.
-    await h.deliverNext();
-    expect(h.getPhaseFromController()).toBe("advisorActive");
-    await h.runTurn({ stopReason: "stop", text: "advice" });
-    expect(h.setModelCalls).toEqual([ADVISOR, ADVISEE]);
-    expect(h.sent[1].deliverAs).toBe("steer");
-    expect(h.getPhaseFromController()).toBe("continuationQueued");
-
-    await h.deliverNext();
-    expect(h.getPhaseFromController()).toBe("adviseeContinuing");
-    await h.runTurn({ stopReason: "stop", text: "working" });
-    expect(h.getPhaseFromController()).toBe("idle");
+    await harness.deliverNext();
+    expect(harness.phase()).toBe("advisorActive");
+    await harness.runTurn({ stopReason: "stop", text: "realization" });
+    expect(harness.loop.model).toBe(ADVISEE);
+    expect(harness.phase()).toBe("continuationQueued");
   });
 
-  it("rejects manual advice while steering messages are pending (Option B)", async () => {
-    const h = setup();
-    h.idle = false;
-    h.userPending = 1;
+  it("requires exact custom type and content to transition queued phases", async () => {
+    const harness = setup();
+    harness.idle = false;
+    await harness.controller.handleAdvise("");
+    const actual = harness.customQueue[0]!;
 
-    await h.controller.handleAdvice("");
-    expect(h.sent).toEqual([]);
-    expect(h.setModelCalls).toEqual([]);
-    expect(h.toolsSet).toEqual([]);
-    expect(h.getPhaseFromController()).toBe("idle");
-    expect(h.lastNotify()?.level).toBe("warning");
-    expect(h.lastNotify()?.message).toMatch(/pending/);
+    await harness.controller.onMessageStart(
+      customStart({ ...actual, customType: "some-other-extension" }),
+    );
+    expect(harness.phase()).toBe("adviceQueued");
+    await harness.controller.onMessageStart(
+      customStart({ ...actual, content: `${actual.content} altered` }),
+    );
+    expect(harness.phase()).toBe("adviceQueued");
+    await harness.deliverNext();
+    expect(harness.phase()).toBe("advisorActive");
   });
 
-  it("does not count the in-flight advisee tail turn during a queued manual cycle", async () => {
-    const h = setup();
-    h.idle = false; // streaming
-    h.loop = { ...h.live, tools: [...h.live.tools] };
-    h.controller.handleAdviceEvery("2");
-    await h.runTurn({ stopReason: "stop", text: "w1" }); // count 1
+  it("ignores ordinary user messages for control transitions", async () => {
+    const harness = setup();
+    harness.idle = false;
+    await harness.controller.handleAdvise("");
+    await harness.deliverUser(harness.customQueue[0]!.content);
+    expect(harness.phase()).toBe("adviceQueued");
+  });
+});
 
-    await h.controller.handleAdvice(""); // streaming manual cycle; activates + queues
-    expect(h.getPhaseFromController()).toBe("adviceQueued");
+describe("activation and restoration failures", () => {
+  it("rejects invalid configuration, missing model, and missing auth", async () => {
+    const invalid = setup();
+    invalid.config = { ok: false, error: "bad config" };
+    await invalid.controller.handleAdvise("");
+    expect(invalid.sent).toEqual([]);
 
-    // The in-flight advisee tail turn (recorded advisee, live advisor) is in
-    // adviceQueued phase: it is neither counted nor treated as the advisor.
-    await h.runTurn({
+    const missing = setup();
+    missing.advisor = undefined;
+    await missing.controller.handleAdvise("");
+    expect(missing.lastNotify()?.message).toMatch(/not found/);
+
+    const unauthenticated = setup();
+    unauthenticated.hasAuthFlag = false;
+    await unauthenticated.controller.handleAdvise("");
+    expect(unauthenticated.lastNotify()?.message).toMatch(/No API key/);
+  });
+
+  it("fails closed on a boolean advisor switch failure", async () => {
+    const harness = setup();
+    harness.advisorSwitch = "false";
+    await harness.controller.handleAdvise("");
+    expect(harness.sent).toEqual([]);
+    expect(harness.thinkingSet).toEqual([]);
+    expect(harness.toolsSet).toEqual([]);
+    expect(harness.phase()).toBe("idle");
+  });
+
+  it("restores after a thrown partially-mutating advisor switch", async () => {
+    const harness = setup();
+    harness.advisorSwitch = "mutate-throw";
+    await harness.controller.handleAdvise("");
+    expect(harness.setModelCalls).toEqual([ADVISOR, ADVISEE]);
+    expect(harness.live.model).toBe(ADVISEE);
+    expect(harness.sent).toEqual([]);
+    expect(harness.lastNotify()?.message).toMatch(/Failed to activate/);
+  });
+
+  it("sends no continuation and disables automatic advice when restore fails", async () => {
+    const harness = setup();
+    harness.controller.handleAdviseEvery("2");
+    harness.adviseeSwitch = "false";
+    await harness.controller.handleAdvise("");
+    await harness.deliverNext();
+    await harness.runTurn({ stopReason: "stop", text: "realization" });
+
+    expect(harness.sent).toHaveLength(1);
+    expect(harness.controller.currentSchedule()).toBeNull();
+    expect(harness.phase()).toBe("idle");
+    expect(harness.lastNotify()?.message).toContain("/model");
+  });
+
+  it("accepts a thrown restore when the live model was already restored", async () => {
+    const harness = setup();
+    harness.adviseeSwitch = "mutate-throw";
+    await harness.controller.handleAdvise("");
+    await harness.deliverNext();
+    await harness.runTurn({ stopReason: "stop", text: "realization" });
+    expect(harness.live.model).toBe(ADVISEE);
+    expect(harness.sent).toHaveLength(2);
+    expect(harness.phase()).toBe("continuationQueued");
+  });
+});
+
+describe("review completion and tool policy", () => {
+  it("keeps a tool-enabled review active across toolUse", async () => {
+    const harness = setup();
+    await harness.controller.handleAdvise("--tools");
+    await harness.deliverNext();
+    await harness.runTurn({ stopReason: "toolUse", text: "investigating" });
+    expect(harness.phase()).toBe("advisorActive");
+    expect(harness.setModelCalls).toEqual([ADVISOR]);
+    await harness.runTurn({ stopReason: "stop", text: "realization" });
+    expect(harness.phase()).toBe("continuationQueued");
+  });
+
+  it("finalizes a tool-free toolUse response when it has usable text", async () => {
+    const harness = setup();
+    await harness.controller.handleAdvise("");
+    await harness.deliverNext();
+    await harness.runTurn({ stopReason: "toolUse", text: "realization" });
+    expect(harness.setModelCalls).toEqual([ADVISOR, ADVISEE]);
+    expect(harness.phase()).toBe("continuationQueued");
+  });
+
+  it("restores without continuation for tool-free empty toolUse", async () => {
+    const harness = setup();
+    await harness.controller.handleAdvise("");
+    await harness.deliverNext();
+    await harness.runTurn({ stopReason: "toolUse", text: "" });
+    expect(harness.sent).toHaveLength(1);
+    expect(harness.phase()).toBe("idle");
+    expect(harness.lastNotify()?.level).toBe("warning");
+  });
+
+  it.each(["error", "aborted"] as const)(
+    "restores without continuation after %s",
+    async (stopReason) => {
+      const harness = setup();
+      await harness.controller.handleAdvise("");
+      await harness.deliverNext();
+      await harness.runTurn({ stopReason });
+      expect(harness.sent).toHaveLength(1);
+      expect(harness.live.model).toBe(ADVISEE);
+      expect(harness.phase()).toBe("idle");
+    },
+  );
+
+  it("restores without continuation for an empty final response", async () => {
+    const harness = setup();
+    await harness.controller.handleAdvise("");
+    await harness.deliverNext();
+    await harness.runTurn({ stopReason: "stop", text: "" });
+    expect(harness.sent).toHaveLength(1);
+    expect(harness.phase()).toBe("idle");
+  });
+
+  it("accepts a length-limited response when it has usable text", async () => {
+    const harness = setup();
+    await harness.controller.handleAdvise("");
+    await harness.deliverNext();
+    await harness.runTurn({ stopReason: "length", text: "useful realization" });
+    expect(harness.phase()).toBe("continuationQueued");
+  });
+});
+
+describe("automatic /advise-every cadence", () => {
+  it("counts original-model low-level turns including toolUse and triggers on N", async () => {
+    const harness = setup();
+    harness.idle = false;
+    harness.controller.handleAdviseEvery("2");
+
+    await harness.runTurn({ stopReason: "stop", text: "work 1" });
+    expect(harness.controller.currentSchedule()?.count).toBe(1);
+    await harness.runTurn({ stopReason: "toolUse", text: "work 2" });
+    expect(harness.controller.currentSchedule()?.count).toBe(0);
+    expect(harness.phase()).toBe("adviceQueued");
+
+    await harness.deliverNext();
+    await harness.runTurn({ stopReason: "stop", text: "realization" });
+    await harness.deliverNext();
+    await harness.runTurn({ stopReason: "stop", text: "continue" });
+    expect(harness.controller.currentSchedule()?.count).toBe(0);
+    await harness.runTurn({ stopReason: "stop", text: "work 3" });
+    expect(harness.controller.currentSchedule()?.count).toBe(1);
+  });
+
+  it("does not jump a below-threshold counter merely because messages are pending", async () => {
+    const harness = setup();
+    harness.idle = false;
+    harness.controller.handleAdviseEvery("3");
+    harness.userPending = 1;
+
+    await harness.runTurn({ stopReason: "stop", text: "work 1" });
+    expect(harness.controller.currentSchedule()?.count).toBe(1);
+    await harness.runTurn({ stopReason: "stop", text: "work 2" });
+    expect(harness.controller.currentSchedule()?.count).toBe(2);
+    expect(harness.sent).toEqual([]);
+  });
+
+  it("saturates at the actual threshold and starts after pending work drains", async () => {
+    const harness = setup();
+    harness.idle = false;
+    harness.controller.handleAdviseEvery("2");
+    await harness.runTurn({ stopReason: "stop", text: "work 1" });
+    harness.userPending = 1;
+    await harness.runTurn({ stopReason: "stop", text: "work 2" });
+    expect(harness.controller.currentSchedule()?.count).toBe(2);
+    expect(harness.sent).toEqual([]);
+
+    harness.userPending = 0;
+    await harness.runTurn({ stopReason: "stop", text: "queue drained" });
+    expect(harness.phase()).toBe("adviceQueued");
+    expect(harness.sent).toHaveLength(1);
+  });
+
+  it("returns an automatic activation race to saturated deferred state", async () => {
+    const harness = setup();
+    harness.idle = false;
+    harness.controller.handleAdviseEvery("1");
+    harness.afterAdvisorSwitch = () => {
+      harness.userPending = 1;
+      harness.afterAdvisorSwitch = undefined;
+    };
+
+    await harness.runTurn({ stopReason: "stop", text: "threshold" });
+    expect(harness.sent).toEqual([]);
+    expect(harness.live.model).toBe(ADVISEE);
+    expect(harness.controller.currentSchedule()?.count).toBe(1);
+    expect(harness.notifies).toHaveLength(1); // schedule-enabled message only
+
+    harness.userPending = 0;
+    await harness.runTurn({ stopReason: "stop", text: "drained" });
+    expect(harness.sent).toHaveLength(1);
+    expect(harness.phase()).toBe("adviceQueued");
+  });
+
+  it("waits a full new interval after a genuine automatic start failure", async () => {
+    const harness = setup();
+    harness.idle = false;
+    harness.controller.handleAdviseEvery("2");
+    await harness.runTurn({ stopReason: "stop", text: "work 1" });
+    harness.config = { ok: false, error: "broken" };
+    await harness.runTurn({ stopReason: "stop", text: "work 2" });
+    expect(harness.controller.currentSchedule()?.count).toBe(0);
+
+    await harness.runTurn({ stopReason: "stop", text: "work 3" });
+    expect(harness.controller.currentSchedule()?.count).toBe(1);
+  });
+
+  it("does not count a turn recorded under the advisor model", async () => {
+    const harness = setup();
+    harness.idle = false;
+    harness.controller.handleAdviseEvery("2");
+    await harness.runTurn({
       stopReason: "stop",
-      text: "tail",
-      provider: ADVISEE.provider,
-      model: ADVISEE.id,
-    });
-    expect(h.getPhaseFromController()).toBe("adviceQueued");
-    expect(h.controller.currentSchedule()?.count).toBe(1); // unchanged
-    expect(
-      h.ourQueue.filter((m) => m.includes("You are the advisor.")),
-    ).toHaveLength(1);
-  });
-});
-
-describe("validation and failure paths", () => {
-  it("rejects invalid configuration without any state change", async () => {
-    const h = setup();
-    h.config = { ok: false, error: "bad config" };
-    await h.controller.handleAdvice("");
-    expect(h.sent).toEqual([]);
-    expect(h.setModelCalls).toEqual([]);
-    expect(h.getPhaseFromController()).toBe("idle");
-    expect(h.lastNotify()?.level).toBe("error");
-  });
-
-  it("rejects an unknown advisor model without sending", async () => {
-    const h = setup();
-    h.advisor = undefined;
-    await h.controller.handleAdvice("");
-    expect(h.sent).toEqual([]);
-    expect(h.setModelCalls).toEqual([]);
-    expect(h.lastNotify()?.message).toMatch(/not found/);
-  });
-
-  it("rejects an advisor with no auth without sending or switching", async () => {
-    const h = setup();
-    h.hasAuthFlag = false;
-    await h.controller.handleAdvice("");
-    expect(h.sent).toEqual([]);
-    expect(h.setModelCalls).toEqual([]);
-    expect(h.lastNotify()?.message).toMatch(/No API key/);
-  });
-
-  it("fails closed if the advisor switch is rejected at activation time", async () => {
-    const h = setup();
-    h.idle = true;
-    h.setModelResult = false; // setModel(advisor) rejected (e.g. auth removed)
-    await h.controller.handleAdvice("");
-    expect(h.sent).toEqual([]);
-    expect(h.setModelCalls).toEqual([ADVISOR]);
-    expect(h.thinkingSet).toEqual([]); // never applied thinking/tools
-    expect(h.toolsSet).toEqual([]);
-    expect(h.getPhaseFromController()).toBe("idle");
-    expect(h.lastNotify()?.level).toBe("error");
-    expect(h.lastNotify()?.message).toMatch(/unavailable/);
-  });
-
-  it("keeps the advisor phase on a tool-use response", async () => {
-    const h = setup();
-    h.idle = true;
-    await h.controller.handleAdvice("");
-    await h.deliverNext();
-    await h.runTurn({ stopReason: "toolUse" });
-    expect(h.getPhaseFromController()).toBe("advisorActive");
-    expect(h.setModelCalls).toEqual([ADVISOR]);
-    expect(h.ourQueue).toHaveLength(0); // no continuation yet
-  });
-
-  it("restores the advisee without continuation on advisor error", async () => {
-    const h = setup();
-    h.idle = true;
-    await h.controller.handleAdvice("");
-    await h.deliverNext();
-    await h.runTurn({ stopReason: "error" });
-    expect(h.setModelCalls).toEqual([ADVISOR, ADVISEE]);
-    expect(h.ourQueue).toHaveLength(0); // no continuation
-    expect(h.getPhaseFromController()).toBe("idle");
-    expect(h.lastNotify()?.level).toBe("error");
-  });
-
-  it("restores the advisee without continuation when the advisor produces no usable text", async () => {
-    const h = setup();
-    h.idle = true;
-    await h.controller.handleAdvice("");
-    await h.deliverNext();
-    await h.runTurn({ stopReason: "stop", text: "" });
-    expect(h.setModelCalls).toEqual([ADVISOR, ADVISEE]);
-    expect(h.ourQueue).toHaveLength(0);
-    expect(h.getPhaseFromController()).toBe("idle");
-    expect(h.lastNotify()?.level).toBe("warning");
-  });
-
-  it("restoration runs once per cycle and does not double-switch", async () => {
-    const h = setup();
-    h.idle = true;
-    await h.controller.handleAdvice("");
-    await h.deliverNext();
-    await h.runTurn({ stopReason: "stop", text: "ok" });
-    expect(h.setModelCalls).toEqual([ADVISOR, ADVISEE]);
-    // A stray second advisor turn_end cannot restore again: snapshot consumed.
-    await h.runTurn({ stopReason: "stop", text: "stale" });
-    expect(h.setModelCalls).toEqual([ADVISOR, ADVISEE]);
-  });
-
-  it("reports an advisee restoration failure without concealing it", async () => {
-    const h = setup();
-    h.idle = true;
-    h.setModelAdviseeResult = false; // restore setModel(advisee) rejected
-    await h.controller.handleAdvice("");
-    await h.deliverNext();
-    await h.runTurn({ stopReason: "stop", text: "ok" });
-    expect(h.setModelCalls).toEqual([ADVISOR, ADVISEE]);
-    expect(h.lastNotify()?.level).toBe("error");
-    expect(h.lastNotify()?.message).toMatch(/Failed to restore the advisee/);
-    // The cycle still sends a continuation (best-effort) despite the failure.
-    expect(
-      h.ourQueue.filter((m) => m.includes("You are the advisee.")),
-    ).toHaveLength(1);
-  });
-});
-
-describe("automatic cadence", () => {
-  it("counts low-level advisee turns and triggers after the Nth", async () => {
-    const h = setup();
-    h.idle = false; // autonomous advisee streaming
-    h.controller.handleAdviceEvery("2");
-    expect(h.controller.currentSchedule()?.every).toBe(2);
-    expect(h.controller.currentSchedule()?.count).toBe(0);
-
-    await h.runTurn({ stopReason: "stop", text: "w1" });
-    expect(h.controller.currentSchedule()?.count).toBe(1);
-    expect(h.getPhaseFromController()).toBe("idle");
-
-    await h.runTurn({ stopReason: "toolUse", text: "w2 with tools" });
-    // Tool-calling advisee turns count too.
-    expect(h.controller.currentSchedule()?.count).toBe(0); // reset at threshold
-    expect(h.getPhaseFromController()).toBe("adviceQueued");
-    expect(h.sent.at(-1)?.deliverAs).toBe("steer");
-
-    // Run the advisor cycle (excluded from counting).
-    await h.deliverNext();
-    expect(h.getPhaseFromController()).toBe("advisorActive");
-    await h.runTurn({ stopReason: "stop", text: "advice" });
-    await h.deliverNext(); // continuation
-    await h.runTurn({ stopReason: "stop", text: "continuing" });
-    expect(h.getPhaseFromController()).toBe("idle");
-    expect(h.controller.currentSchedule()?.count).toBe(0);
-
-    // Subsequent autonomous advisee turns resume counting normally.
-    await h.runTurn({ stopReason: "stop", text: "w3" });
-    expect(h.controller.currentSchedule()?.count).toBe(1);
-  });
-
-  it("does not count an idle-phase turn whose recorded model is the advisor", async () => {
-    const h = setup();
-    h.idle = false;
-    h.controller.handleAdviceEvery("3");
-    // An idle-phase turn with advisor recorded metadata but advisee live state
-    // is not counted (metadata-based classification, not ctx.model).
-    await h.runTurn({
-      stopReason: "stop",
-      text: "stale",
       provider: ADVISOR.provider,
       model: ADVISOR.id,
     });
-    expect(h.controller.currentSchedule()?.count).toBe(0);
-    await h.runTurn({ stopReason: "stop", text: "real advisee work" });
-    expect(h.controller.currentSchedule()?.count).toBe(1);
+    expect(harness.controller.currentSchedule()?.count).toBe(0);
   });
 
-  it("defers an automatic trigger while steering messages are pending (Option B)", async () => {
-    const h = setup();
-    h.idle = false;
-    h.controller.handleAdviceEvery("2");
-    await h.runTurn({ stopReason: "stop", text: "w1" });
-    expect(h.controller.currentSchedule()?.count).toBe(1);
-
-    h.userPending = 1; // user steering messages are queued
-    await h.runTurn({ stopReason: "stop", text: "w2" });
-    // No trigger; counter saturates at the threshold; phase stays idle.
-    expect(h.getPhaseFromController()).toBe("idle");
-    expect(h.ourQueue).toHaveLength(0);
-    expect(h.setModelCalls).toEqual([]);
-    expect(h.controller.currentSchedule()?.count).toBe(2); // saturated at threshold
-
-    h.userPending = 0; // queue drained
-    await h.runTurn({ stopReason: "stop", text: "w3" });
-    expect(h.getPhaseFromController()).toBe("adviceQueued");
-    expect(h.sent.at(-1)?.deliverAs).toBe("steer");
+  it("manual advice leaves an existing counter unchanged", async () => {
+    const harness = setup();
+    harness.idle = false;
+    harness.controller.handleAdviseEvery("3");
+    await harness.runTurn({ stopReason: "stop" });
+    harness.idle = true;
+    await harness.controller.handleAdvise("");
+    await harness.deliverNext();
+    await harness.runTurn({ stopReason: "stop", text: "realization" });
+    await harness.deliverNext();
+    await harness.runTurn({ stopReason: "stop", text: "continue" });
+    expect(harness.controller.currentSchedule()?.count).toBe(1);
   });
 
-  it("off clears the schedule", () => {
-    const h = setup();
-    h.controller.handleAdviceEvery("5");
-    expect(h.controller.currentSchedule()).not.toBeNull();
-    h.controller.handleAdviceEvery("off");
-    expect(h.controller.currentSchedule()).toBeNull();
-  });
-
-  it("reconfiguration resets the counter and schedule fields", async () => {
-    const h = setup();
-    h.controller.handleAdviceEvery("3");
-    await h.runTurn({ stopReason: "stop", text: "w" });
-    await h.runTurn({ stopReason: "stop", text: "w" });
-    expect(h.controller.currentSchedule()?.count).toBe(2);
-    h.controller.handleAdviceEvery("5 --tools focus on risks");
-    expect(h.controller.currentSchedule()?.every).toBe(5);
-    expect(h.controller.currentSchedule()?.tools).toBe(true);
-    expect(h.controller.currentSchedule()?.context).toBe("focus on risks");
-    expect(h.controller.currentSchedule()?.count).toBe(0);
-  });
-
-  it("manual advice does not reset the automatic counter", async () => {
-    const h = setup();
-    h.idle = false;
-    h.controller.handleAdviceEvery("3");
-    await h.runTurn({ stopReason: "stop", text: "w1" });
-    expect(h.controller.currentSchedule()?.count).toBe(1);
-
-    // Run a complete manual cycle (idle manual): switch to idle for the command.
-    h.idle = true;
-    await h.controller.handleAdvice("");
-    await h.deliverNext();
-    await h.runTurn({ stopReason: "stop", text: "advice" });
-    await h.deliverNext();
-    // continuation turn happens while "streaming" again
-    await h.runTurn({ stopReason: "stop", text: "continuing" });
-    expect(h.getPhaseFromController()).toBe("idle");
-
-    // Counter untouched by the manual cycle; two more turns trigger auto advice.
-    expect(h.controller.currentSchedule()?.count).toBe(1);
-    h.idle = false;
-    await h.runTurn({ stopReason: "stop", text: "w2" });
-    expect(h.controller.currentSchedule()?.count).toBe(2);
-    await h.runTurn({ stopReason: "stop", text: "w3" });
-    expect(h.controller.currentSchedule()?.count).toBe(0);
-    expect(h.getPhaseFromController()).toBe("adviceQueued");
-  });
-
-  it("failed automatic advice waits a full new interval before retrying", async () => {
-    const h = setup();
-    h.idle = false;
-    h.controller.handleAdviceEvery("2");
-    await h.runTurn({ stopReason: "stop", text: "w1" }); // count 1
-    // Make the advisor config invalid for the first automatic attempt.
-    h.config = { ok: false, error: "broken" };
-    await h.runTurn({ stopReason: "stop", text: "w2" }); // threshold -> fail -> count 0
-    expect(h.getPhaseFromController()).toBe("idle");
-    expect(h.controller.currentSchedule()?.count).toBe(0);
-    await h.runTurn({ stopReason: "stop", text: "w3" }); // not enough
-    expect(h.getPhaseFromController()).toBe("idle");
-    expect(h.controller.currentSchedule()?.count).toBe(1);
-    // Restore a valid config; the next threshold turn triggers again.
-    h.config = {
-      ok: true,
-      config: {
-        provider: "openai-codex",
-        model: "gpt-5.6-sol",
-        thinkingLevel: "high",
-      },
-    };
-    await h.runTurn({ stopReason: "stop", text: "w4" });
-    expect(h.getPhaseFromController()).toBe("adviceQueued");
-  });
-});
-
-describe("queued user messages during a cycle", () => {
-  it("lets a user steer run under the restored advisee between advisor and continuation, without losing the continuation", async () => {
-    const h = setup();
-    h.idle = false;
-    h.loop = { ...h.live, tools: [...h.live.tools] };
-    await h.controller.handleAdvice("");
-
-    // In-flight advisee tail turn finishes; advisor prompt drains next.
-    await h.runTurn({
-      stopReason: "stop",
-      text: "tail",
-      provider: ADVISEE.provider,
-      model: ADVISEE.id,
+  it("reconfiguration resets fields and off disables future cycles", async () => {
+    const harness = setup();
+    harness.idle = false;
+    harness.controller.handleAdviseEvery("3");
+    await harness.runTurn({ stopReason: "stop" });
+    harness.controller.handleAdviseEvery("5 --tools focus on risks");
+    expect(harness.controller.currentSchedule()).toMatchObject({
+      every: 5,
+      tools: true,
+      context: "focus on risks",
+      count: 0,
     });
-    await h.deliverNext(); // advisor prompt
-    expect(h.getPhaseFromController()).toBe("advisorActive");
-
-    // A user steer is queued during the advisor turn, before it finishes.
-    h.userPending = 1;
-    await h.runTurn({ stopReason: "stop", text: "advisor advice" });
-    // Advisor finished: advisee restored, continuation queued (as steer).
-    expect(h.getPhaseFromController()).toBe("continuationQueued");
-    expect(h.loop.model).toBe(ADVISEE); // restore happened before next-turn snapshot
-
-    // The user's earlier steer drains and runs under the restored advisee;
-    // it is not our continuation, so the cycle phase is unchanged.
-    await h.deliver("do this other thing first");
-    expect(h.getPhaseFromController()).toBe("continuationQueued");
-    await h.runTurn({ stopReason: "stop", text: "did the other thing" });
-    expect(h.getPhaseFromController()).toBe("continuationQueued");
-
-    // The continuation is still queued and runs afterward, completing the cycle.
-    await h.deliverNext();
-    expect(h.getPhaseFromController()).toBe("adviseeContinuing");
-    await h.runTurn({ stopReason: "stop", text: "continuing the work" });
-    expect(h.getPhaseFromController()).toBe("idle");
+    harness.controller.handleAdviseEvery("off");
+    expect(harness.controller.currentSchedule()).toBeNull();
   });
 });
 
-describe("session lifecycle", () => {
-  it("retains the schedule across idle reload and validates reloaded config", () => {
-    const h = setup();
-    h.controller.handleAdviceEvery("3");
-    h.controller.onSessionShutdown({
-      type: "session_shutdown",
-      reason: "reload",
-    } as unknown as SessionShutdownEvent);
-    expect(h.controller.currentSchedule()).not.toBeNull();
-    h.config = {
-      ok: true,
-      config: {
-        provider: "openai-codex",
-        model: "gpt-5.6-sol",
-        thinkingLevel: "high",
-      },
-    };
-    h.controller.onSessionStart({
+describe("FIFO continuation and lifecycle", () => {
+  it("preserves an earlier user steer under the restored model before continuation", async () => {
+    const harness = setup();
+    harness.idle = false;
+    await harness.controller.handleAdvise("");
+    await harness.runTurn({ stopReason: "stop", text: "tail" });
+    await harness.deliverNext();
+
+    harness.userPending = 1;
+    await harness.runTurn({ stopReason: "stop", text: "realization" });
+    expect(harness.phase()).toBe("continuationQueued");
+    expect(harness.loop.model).toBe(ADVISEE);
+
+    await harness.deliverUser("do this first");
+    await harness.runTurn({ stopReason: "stop", text: "done" });
+    expect(harness.phase()).toBe("continuationQueued");
+    await harness.deliverNext();
+    await harness.runTurn({ stopReason: "stop", text: "continue" });
+    expect(harness.phase()).toBe("idle");
+  });
+
+  it("retains a same-session schedule across reload and validates config", () => {
+    const harness = setup();
+    harness.controller.handleAdviseEvery("3");
+    harness.controller.onSessionStart({
       type: "session_start",
       reason: "reload",
     } as unknown as SessionStartEvent);
-    expect(h.controller.currentSchedule()?.every).toBe(3);
-  });
+    expect(harness.controller.currentSchedule()?.every).toBe(3);
 
-  it("notifies on invalid config after reload", () => {
-    const h = setup();
-    h.controller.handleAdviceEvery("3");
-    h.config = { ok: false, error: "global: missing provider" };
-    h.controller.onSessionStart({
+    harness.config = { ok: false, error: "global: missing provider" };
+    harness.controller.onSessionStart({
       type: "session_start",
       reason: "reload",
     } as unknown as SessionStartEvent);
-    expect(h.lastNotify()?.level).toBe("error");
-    expect(h.lastNotify()?.message).toMatch(/invalid/);
+    expect(harness.lastNotify()?.message).toMatch(/invalid/);
   });
 
-  it("clears the schedule on reload when the session id differs", () => {
-    const h = setup();
-    h.controller.handleAdviceEvery("3");
-    h.sessionId = "sess-2";
-    h.controller.onSessionStart({
+  it("clears a mismatched schedule on reload and nonreload session start", () => {
+    const mismatch = setup();
+    mismatch.controller.handleAdviseEvery("3");
+    mismatch.sessionId = "sess-2";
+    mismatch.controller.onSessionStart({
       type: "session_start",
       reason: "reload",
     } as unknown as SessionStartEvent);
-    expect(h.controller.currentSchedule()).toBeNull();
-  });
+    expect(mismatch.controller.currentSchedule()).toBeNull();
 
-  it("clears the schedule and current cycle on new/resume/fork/restores defensively", async () => {
-    const h = setup();
-    h.controller.handleAdviceEvery("3");
-    h.idle = true;
-    await h.controller.handleAdvice("");
-    expect(h.controller.hasCycle()).toBe(true);
-    h.controller.onSessionStart({
+    const replaced = setup();
+    replaced.controller.handleAdviseEvery("3");
+    replaced.controller.onSessionStart({
       type: "session_start",
-      reason: "new",
+      reason: "resume",
     } as unknown as SessionStartEvent);
-    expect(h.controller.currentSchedule()).toBeNull();
-    expect(h.getPhaseFromController()).toBe("idle");
-    expect(h.controller.hasCycle()).toBe(false);
+    expect(replaced.controller.currentSchedule()).toBeNull();
   });
 
-  it("defensively restores the advisee on a non-reload shutdown mid-cycle", async () => {
-    const h = setup();
-    h.idle = true;
-    await h.controller.handleAdvice(""); // advisor activated, snapshot present
-    expect(h.setModelCalls).toEqual([ADVISOR]);
-    await h.controller.onSessionShutdown({
+  it("restores defensively on nonreload shutdown", async () => {
+    const harness = setup();
+    await harness.controller.handleAdvise("");
+    await harness.controller.onSessionShutdown({
       type: "session_shutdown",
       reason: "quit",
     } as unknown as SessionShutdownEvent);
-    expect(h.setModelCalls).toEqual([ADVISOR, ADVISEE]); // defensive restore
-    expect(h.controller.currentSchedule()).toBeNull();
-    expect(h.getPhaseFromController()).toBe("idle");
+    expect(harness.setModelCalls).toEqual([ADVISOR, ADVISEE]);
+    expect(harness.phase()).toBe("idle");
   });
 
-  it("clears the schedule on a non-reload shutdown without an active cycle", () => {
-    const h = setup();
-    h.controller.handleAdviceEvery("3");
-    h.controller.onSessionShutdown({
+  it("leaves the process schedule intact on reload shutdown", async () => {
+    const harness = setup();
+    harness.controller.handleAdviseEvery("3");
+    await harness.controller.onSessionShutdown({
       type: "session_shutdown",
-      reason: "quit",
+      reason: "reload",
     } as unknown as SessionShutdownEvent);
-    expect(h.controller.currentSchedule()).toBeNull();
+    expect(harness.controller.currentSchedule()?.every).toBe(3);
   });
 });

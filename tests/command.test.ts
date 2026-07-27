@@ -1,70 +1,76 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  adviceCompletions,
-  adviceEveryCompletions,
-  parseAdvice,
-  parseAdviceEvery,
+  adviseCompletions,
+  adviseEveryCompletions,
+  ADVISE_EVERY_USAGE,
+  ADVISE_USAGE,
+  parseAdvise,
+  parseAdviseEvery,
 } from "../src/command.js";
 
-describe("parseAdvice", () => {
-  it("bare advice is valid and tool-free", () => {
-    expect(parseAdvice("")).toEqual({
-      kind: "advice",
+describe("parseAdvise", () => {
+  it("bare advise is valid and tool-free", () => {
+    expect(parseAdvise("")).toEqual({
+      kind: "advise",
       tools: false,
       context: "",
     });
-    expect(parseAdvice("   ")).toEqual({
-      kind: "advice",
+    expect(parseAdvise("   ")).toEqual({
+      kind: "advise",
       tools: false,
       context: "",
     });
   });
 
   it("treats plain text as additional context", () => {
-    expect(parseAdvice("focus on correctness")).toEqual({
-      kind: "advice",
+    expect(parseAdvise("focus on correctness")).toEqual({
+      kind: "advise",
       tools: false,
       context: "focus on correctness",
     });
   });
 
   it("accepts --tools with and without context", () => {
-    expect(parseAdvice("--tools")).toEqual({
-      kind: "advice",
+    expect(parseAdvise("--tools")).toEqual({
+      kind: "advise",
       tools: true,
       context: "",
     });
-    expect(parseAdvice("--tools inspect first")).toEqual({
-      kind: "advice",
+    expect(parseAdvise("--tools inspect first")).toEqual({
+      kind: "advise",
       tools: true,
       context: "inspect first",
     });
   });
 
   it("rejects an unknown leading option with usage", () => {
-    const result = parseAdvice("--verbose something");
+    const result = parseAdvise("--verbose something");
     expect(result.kind).toBe("usage");
+    expect(result).toEqual({
+      kind: "usage",
+      error: ADVISE_USAGE,
+    });
   });
 
   it("does not treat a later --tools as an option", () => {
     // `--tools` is recognized only in the leading option position.
-    const result = parseAdvice("focus --tools");
+    const result = parseAdvise("focus --tools");
     expect(result).toEqual({
-      kind: "advice",
+      kind: "advise",
       tools: false,
       context: "focus --tools",
     });
   });
 });
 
-describe("parseAdviceEvery", () => {
+describe("parseAdviseEvery", () => {
   it("requires arguments", () => {
-    expect(parseAdviceEvery("").kind).toBe("usage");
+    expect(parseAdviseEvery("").kind).toBe("usage");
   });
 
   it("parses a positive integer interval", () => {
-    expect(parseAdviceEvery("50")).toEqual({
+    expect(parseAdviseEvery("50")).toEqual({
       kind: "schedule",
       every: 50,
       tools: false,
@@ -74,7 +80,7 @@ describe("parseAdviceEvery", () => {
 
   it("parses interval with context", () => {
     expect(
-      parseAdviceEvery("50 focus on correctness and overlooked risks"),
+      parseAdviseEvery("50 focus on correctness and overlooked risks"),
     ).toEqual({
       kind: "schedule",
       every: 50,
@@ -84,14 +90,14 @@ describe("parseAdviceEvery", () => {
   });
 
   it("parses interval with --tools and optional context", () => {
-    expect(parseAdviceEvery("50 --tools")).toEqual({
+    expect(parseAdviseEvery("50 --tools")).toEqual({
       kind: "schedule",
       every: 50,
       tools: true,
       context: "",
     });
     expect(
-      parseAdviceEvery("50 --tools inspect the relevant implementation first"),
+      parseAdviseEvery("50 --tools inspect the relevant implementation first"),
     ).toEqual({
       kind: "schedule",
       every: 50,
@@ -101,77 +107,95 @@ describe("parseAdviceEvery", () => {
   });
 
   it("parses off", () => {
-    expect(parseAdviceEvery("off")).toEqual({ kind: "off" });
+    expect(parseAdviseEvery("off")).toEqual({ kind: "off" });
   });
 
   it("rejects off with trailing arguments", () => {
-    expect(parseAdviceEvery("off 50").kind).toBe("usage");
+    const result = parseAdviseEvery("off 50");
+    expect(result.kind).toBe("usage");
+    expect(result).toEqual({
+      kind: "usage",
+      error: "/advise-every off takes no arguments.\n\n" + ADVISE_EVERY_USAGE,
+    });
   });
 
   it.each(["0", "-1", "1.5", "abc", "3.0", "1e3", "0x5"])(
     "rejects invalid interval %s",
     (arg) => {
-      expect(parseAdviceEvery(arg).kind).toBe("usage");
+      const result = parseAdviseEvery(arg);
+      expect(result.kind).toBe("usage");
+      expect(result).toEqual({
+        kind: "usage",
+        error: ADVISE_EVERY_USAGE,
+      });
     },
   );
 
   it("rejects an unsafe integer", () => {
-    expect(parseAdviceEvery(`${Number.MAX_SAFE_INTEGER + 1}`).kind).toBe(
-      "usage",
-    );
+    const result = parseAdviseEvery(`${Number.MAX_SAFE_INTEGER + 1}`);
+    expect(result.kind).toBe("usage");
+    expect(result).toEqual({
+      kind: "usage",
+      error: ADVISE_EVERY_USAGE,
+    });
   });
 
   it("rejects an unknown leading option after the interval", () => {
-    expect(parseAdviceEvery("5 --verbose").kind).toBe("usage");
+    const result = parseAdviseEvery("5 --verbose");
+    expect(result.kind).toBe("usage");
+    expect(result).toEqual({
+      kind: "usage",
+      error: ADVISE_EVERY_USAGE,
+    });
   });
 });
 
-describe("adviceCompletions", () => {
+describe("adviseCompletions", () => {
   it("offers --tools at the initial position", () => {
-    expect(adviceCompletions("")).toEqual([
+    expect(adviseCompletions("")).toEqual([
       expect.objectContaining({ value: "--tools" }),
     ]);
   });
 
   it("offers --tools while typing it", () => {
-    expect(adviceCompletions("--t")).toEqual([
+    expect(adviseCompletions("--t")).toEqual([
       expect.objectContaining({ value: "--tools" }),
     ]);
   });
 
   it("returns null for plain context typing", () => {
-    expect(adviceCompletions("focus")).toBeNull();
+    expect(adviseCompletions("focus")).toBeNull();
   });
 
   it("returns null for an unrelated option prefix", () => {
-    expect(adviceCompletions("--x")).toBeNull();
+    expect(adviseCompletions("--x")).toBeNull();
   });
 });
 
-describe("adviceEveryCompletions", () => {
+describe("adviseEveryCompletions", () => {
   it("offers off at the first argument position", () => {
-    expect(adviceEveryCompletions("")).toEqual([
+    expect(adviseEveryCompletions("")).toEqual([
       expect.objectContaining({ value: "off" }),
     ]);
-    expect(adviceEveryCompletions("of")).toEqual([
+    expect(adviseEveryCompletions("of")).toEqual([
       expect.objectContaining({ value: "off" }),
     ]);
   });
 
   it("offers --tools after a valid interval and whitespace", () => {
-    expect(adviceEveryCompletions("50 ")).toEqual([
+    expect(adviseEveryCompletions("50 ")).toEqual([
       expect.objectContaining({ value: "--tools" }),
     ]);
-    expect(adviceEveryCompletions("50 --t")).toEqual([
+    expect(adviseEveryCompletions("50 --t")).toEqual([
       expect.objectContaining({ value: "--tools" }),
     ]);
   });
 
   it("returns null while typing the interval number", () => {
-    expect(adviceEveryCompletions("5")).toBeNull();
+    expect(adviseEveryCompletions("5")).toBeNull();
   });
 
   it("returns null for an unrelated option after the interval", () => {
-    expect(adviceEveryCompletions("50 --x")).toBeNull();
+    expect(adviseEveryCompletions("50 --x")).toBeNull();
   });
 });

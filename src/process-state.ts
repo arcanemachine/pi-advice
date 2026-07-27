@@ -1,7 +1,7 @@
 /**
- * Process-local carrier for the active `/advice-every` schedule.
+ * Process-local carrier for the automatic advise schedule.
  *
- * Lifetime contract (PLAN.md):
+ * Lifetime contract:
  * - The schedule survives idle `/reload` (same Pi process, extension code is
  *   re-evaluated) because the state object lives on `globalThis` under a
  *   `Symbol.for(...)` key.
@@ -40,12 +40,15 @@ function isSchedule(value: unknown): value is AdviceSchedule {
   const s = value as Record<string, unknown>;
   return (
     typeof s.sessionId === "string" &&
+    s.sessionId.length > 0 &&
     typeof s.every === "number" &&
     Number.isSafeInteger(s.every) &&
+    s.every > 0 &&
     typeof s.tools === "boolean" &&
     typeof s.context === "string" &&
     typeof s.count === "number" &&
-    Number.isFinite(s.count)
+    Number.isSafeInteger(s.count) &&
+    s.count >= 0
   );
 }
 
@@ -77,10 +80,12 @@ export function getSchedule(): AdviceSchedule | null {
 
 /**
  * Replace the schedule. Mutates the shared state object in place so identity
- * stays stable across re-evaluation. Pass `null` to disable.
+ * stays stable across re-evaluation. Pass `null` to disable. Malformed
+ * schedules are rejected safely by clearing the schedule instead.
  */
 export function setSchedule(schedule: AdviceSchedule | null): void {
-  getState().schedule = schedule;
+  getState().schedule =
+    schedule === null || isSchedule(schedule) ? schedule : null;
 }
 
 /** Clear the automatic schedule (equivalent to `setSchedule(null)`). */

@@ -1,16 +1,3 @@
-/**
- * pi-advice extension entrypoint.
- *
- * Wires the {@link AdviceController} into Pi's command and event surfaces. The
- * controller is the single source of cycle state; this module only adapts the
- * live Pi objects into its {@link AdviceDeps} interface.
- *
- * Pi hands a fresh `ctx` to each handler. Those `ctx` objects expose the same
- * session, so the most recent one is kept in `ctxRef` for the deps closures to
- * read. Extension event emission is sequential, so only one handler is active
- * at a time and `ctxRef` is stable for the duration of a call.
- */
-
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
@@ -22,9 +9,8 @@ import {
   type AdviceDeps,
   type AdvisorModel,
 } from "./advice-controller.js";
-import { adviceCompletions, adviceEveryCompletions } from "./command.js";
+import { adviseCompletions, adviseEveryCompletions } from "./command.js";
 import { loadConfig } from "./config.js";
-import type { NotifyLevel } from "./types.js";
 
 export default function piAdvice(pi: ExtensionAPI): void {
   let ctxRef: ExtensionContext | undefined;
@@ -44,9 +30,7 @@ export default function piAdvice(pi: ExtensionAPI): void {
     setModel: (model) => pi.setModel(model),
     setThinking: (level) => pi.setThinkingLevel(level),
     setActiveTools: (names) => pi.setActiveTools(names),
-    sendUserMessage: (content, opts) => {
-      void pi.sendUserMessage(content, opts);
-    },
+    sendMessage: (message, options) => pi.sendMessage(message, options),
     isIdle: () => ctx().isIdle(),
     hasPendingMessages: () => ctx().hasPendingMessages(),
     notify: (message, level) => ctx().ui.notify(message, level),
@@ -58,43 +42,43 @@ export default function piAdvice(pi: ExtensionAPI): void {
     ctxRef = next;
   };
 
-  pi.registerCommand("advice", {
+  pi.registerCommand("advise", {
     description:
-      "Invite a configured advisor model to review the advisee's work, then continue",
-    getArgumentCompletions: adviceCompletions,
-    handler: async (args, c: ExtensionCommandContext) => {
-      setCtx(c);
-      await controller.handleAdvice(args);
+      "Reconsider the assistant's current work with a configured model, then continue",
+    getArgumentCompletions: adviseCompletions,
+    handler: async (args, commandContext: ExtensionCommandContext) => {
+      setCtx(commandContext);
+      await controller.handleAdvise(args);
     },
   });
 
-  pi.registerCommand("advice-every", {
+  pi.registerCommand("advise-every", {
     description:
-      "Enable, replace, or disable periodic advisor review ('off' to disable)",
-    getArgumentCompletions: adviceEveryCompletions,
-    handler: async (args, c: ExtensionCommandContext) => {
-      setCtx(c);
-      controller.handleAdviceEvery(args);
+      "Enable, replace, or disable periodic reconsideration ('off' to disable)",
+    getArgumentCompletions: adviseEveryCompletions,
+    handler: async (args, commandContext: ExtensionCommandContext) => {
+      setCtx(commandContext);
+      controller.handleAdviseEvery(args);
     },
   });
 
-  pi.on("message_start", async (event, c) => {
-    setCtx(c);
+  pi.on("message_start", async (event, context) => {
+    setCtx(context);
     await controller.onMessageStart(event);
   });
 
-  pi.on("turn_end", async (event, c) => {
-    setCtx(c);
+  pi.on("turn_end", async (event, context) => {
+    setCtx(context);
     await controller.onTurnEnd(event);
   });
 
-  pi.on("session_start", async (event, c) => {
-    setCtx(c);
+  pi.on("session_start", async (event, context) => {
+    setCtx(context);
     controller.onSessionStart(event);
   });
 
-  pi.on("session_shutdown", async (event, c) => {
-    setCtx(c);
-    controller.onSessionShutdown(event);
+  pi.on("session_shutdown", async (event, context) => {
+    setCtx(context);
+    await controller.onSessionShutdown(event);
   });
 }

@@ -1,5 +1,5 @@
 /**
- * Command parsing, usage text, and autocomplete for `/advice` and `/advice-every`.
+ * Command parsing, usage text, and autocomplete for `/advise` and `/advise-every`.
  *
  * Parsing is pure so it can be tested exhaustively without a Pi context. The
  * rules enforce the approved command forms and surface concise usage for
@@ -13,39 +13,39 @@ export interface CommandCompletion {
   description?: string;
 }
 
-/** Marker option enabling the advisee's active tool set for a cycle. */
+/** Marker option enabling the active tool set for a cycle. */
 const TOOLS_OPTION = "--tools";
 
-/** Representative forms shown for malformed `/advice-every` input. */
-export const ADVICE_EVERY_USAGE = [
+/** Representative forms shown for malformed `/advise-every` input. */
+export const ADVISE_EVERY_USAGE = [
   "Usage:",
-  "  /advice-every 50",
-  "  /advice-every 50 focus on correctness and overlooked risks",
-  "  /advice-every 50 --tools",
-  "  /advice-every 50 --tools inspect the relevant implementation first",
-  "  /advice-every off",
+  "  /advise-every 50",
+  "  /advise-every 50 focus on correctness and overlooked risks",
+  "  /advise-every 50 --tools",
+  "  /advise-every 50 --tools inspect the relevant implementation first",
+  "  /advise-every off",
 ].join("\n");
 
-/** Representative forms shown for malformed `/advice` input. */
-export const ADVICE_USAGE = [
+/** Representative forms shown for malformed `/advise` input. */
+export const ADVISE_USAGE = [
   "Usage:",
-  "  /advice",
-  "  /advice focus on whether the current approach matches the plan",
-  "  /advice --tools",
-  "  /advice --tools inspect the relevant implementation before advising",
+  "  /advise",
+  "  /advise focus on whether the current approach matches the plan",
+  "  /advise --tools",
+  "  /advise --tools inspect the relevant implementation before reconsidering",
 ].join("\n");
 
-export interface AdviceCommand {
-  kind: "advice";
+export interface AdviseCommand {
+  kind: "advise";
   tools: boolean;
   context: string;
 }
 
-export interface AdviceEveryOff {
+export interface AdviseEveryOff {
   kind: "off";
 }
 
-export interface AdviceEverySchedule {
+export interface AdviseEverySchedule {
   kind: "schedule";
   every: number;
   tools: boolean;
@@ -57,48 +57,48 @@ export interface CommandUsage {
   error: string;
 }
 
-export type AdviceParseResult = AdviceCommand | CommandUsage;
-export type AdviceEveryParseResult =
-  | AdviceEverySchedule
-  | AdviceEveryOff
+export type AdviseParseResult = AdviseCommand | CommandUsage;
+export type AdviseEveryParseResult =
+  | AdviseEverySchedule
+  | AdviseEveryOff
   | CommandUsage;
 
 /**
- * Parse `/advice` arguments.
+ * Parse `/advise` arguments.
  *
  * `--tools` is recognized only in the leading option position. Any other
  * leading `--...` option yields usage rather than being treated as context. All
  * remaining text after an accepted leading token is opaque additional context.
  */
-export function parseAdvice(args: string): AdviceParseResult {
+export function parseAdvise(args: string): AdviseParseResult {
   const trimmed = args.trim();
   if (trimmed === "") {
-    return { kind: "advice", tools: false, context: "" };
+    return { kind: "advise", tools: false, context: "" };
   }
 
   const firstToken = trimmed.split(/\s+/)[0] ?? "";
   if (firstToken === TOOLS_OPTION) {
     const context = trimmed.slice(TOOLS_OPTION.length).trim();
-    return { kind: "advice", tools: true, context };
+    return { kind: "advise", tools: true, context };
   }
   if (firstToken.startsWith("--")) {
-    return { kind: "usage", error: ADVICE_USAGE };
+    return { kind: "usage", error: ADVISE_USAGE };
   }
-  return { kind: "advice", tools: false, context: trimmed };
+  return { kind: "advise", tools: false, context: trimmed };
 }
 
 /**
- * Parse `/advice-every` arguments.
+ * Parse `/advise-every` arguments.
  *
  * The first token is either `off` (with no trailing args) or a positive safe
  * integer. After the interval, `--tools` may appear as an immediate option;
  * remaining text is opaque context. Zero, negatives, decimals, non-numeric
  * values, unsafe integers, and unknown leading options all surface usage.
  */
-export function parseAdviceEvery(args: string): AdviceEveryParseResult {
+export function parseAdviseEvery(args: string): AdviseEveryParseResult {
   const trimmed = args.trim();
   if (trimmed === "") {
-    return { kind: "usage", error: ADVICE_EVERY_USAGE };
+    return { kind: "usage", error: ADVISE_EVERY_USAGE };
   }
 
   const tokens = trimmed.split(/\s+/);
@@ -108,7 +108,7 @@ export function parseAdviceEvery(args: string): AdviceEveryParseResult {
     if (tokens.length > 1) {
       return {
         kind: "usage",
-        error: "/advice-every off takes no arguments.\n\n" + ADVICE_EVERY_USAGE,
+        error: "/advise-every off takes no arguments.\n\n" + ADVISE_EVERY_USAGE,
       };
     }
     return { kind: "off" };
@@ -116,11 +116,11 @@ export function parseAdviceEvery(args: string): AdviceEveryParseResult {
 
   // Interval must be a positive safe integer.
   if (!/^\d+$/.test(first)) {
-    return { kind: "usage", error: ADVICE_EVERY_USAGE };
+    return { kind: "usage", error: ADVISE_EVERY_USAGE };
   }
   const every = Number(first);
   if (first === "0" || !Number.isSafeInteger(every) || every < 1) {
-    return { kind: "usage", error: ADVICE_EVERY_USAGE };
+    return { kind: "usage", error: ADVISE_EVERY_USAGE };
   }
 
   const rest = trimmed.slice(first.length).trim();
@@ -130,7 +130,7 @@ export function parseAdviceEvery(args: string): AdviceEveryParseResult {
 function parseAfterInterval(
   every: number,
   rest: string,
-): AdviceEveryParseResult {
+): AdviseEveryParseResult {
   if (rest === "") {
     return { kind: "schedule", every, tools: false, context: "" };
   }
@@ -144,7 +144,7 @@ function parseAfterInterval(
 
   // Any other leading option is unknown.
   if (rest.startsWith("--")) {
-    return { kind: "usage", error: ADVICE_EVERY_USAGE };
+    return { kind: "usage", error: ADVISE_EVERY_USAGE };
   }
 
   return { kind: "schedule", every, tools: false, context: rest };
@@ -153,13 +153,13 @@ function parseAfterInterval(
 const TOOLS_COMPLETION: CommandCompletion = {
   value: TOOLS_OPTION,
   label: TOOLS_OPTION,
-  description: "Let the advisor investigate with the advisee's active tools",
+  description: "Let the reconsidering model investigate with the active tools",
 };
 
 const OFF_COMPLETION: CommandCompletion = {
   value: "off",
   label: "off",
-  description: "Disable the automatic advice schedule",
+  description: "Disable the automatic advise schedule",
 };
 
 function matches(prefix: string, candidate: string): boolean {
@@ -167,10 +167,10 @@ function matches(prefix: string, candidate: string): boolean {
 }
 
 /**
- * Completions for `/advice`. Offers `--tools` at the initial argument position
+ * Completions for `/advise`. Offers `--tools` at the initial argument position
  * and returns `null` otherwise so Pi's normal completion behavior is intact.
  */
-export function adviceCompletions(prefix: string): CommandCompletion[] | null {
+export function adviseCompletions(prefix: string): CommandCompletion[] | null {
   if (prefix === "" || matches(prefix, TOOLS_OPTION)) {
     return [TOOLS_COMPLETION];
   }
@@ -178,10 +178,10 @@ export function adviceCompletions(prefix: string): CommandCompletion[] | null {
 }
 
 /**
- * Completions for `/advice-every`. Offers `off` at the first argument position
+ * Completions for `/advise-every`. Offers `off` at the first argument position
  * and `--tools` after a valid interval followed by separating whitespace.
  */
-export function adviceEveryCompletions(
+export function adviseEveryCompletions(
   prefix: string,
 ): CommandCompletion[] | null {
   // After a valid interval and separating whitespace, complete the option slot.

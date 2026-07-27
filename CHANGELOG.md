@@ -7,20 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Renamed public commands from `/advice` and `/advice-every` to `/advise` and
+  `/advise-every`.
+- Reframed reconsideration as the assistant's own fresh realization and hidden
+  continuation from that realization.
+- Replaced visible control prompts with hidden custom messages and added the
+  `Advising...` / `Advising: <focus>` start notification.
+- Documented support for default `steeringMode: "one-at-a-time"` only.
+
+### Fixed
+
+- Deferred automatic cycles now saturate only after their configured interval.
+- Activation rechecks pending steering before queueing reconsideration.
+- Model-switch exceptions and restoration failures fail closed: no continuation
+  is sent after unsuccessful restoration, and automatic advice is disabled.
+- Tool-free cycles no longer remain in a tool loop after `toolUse`.
+- Configuration validation now validates each source before merging and reports
+  malformed files and invalid fields without throwing.
+- Process-global schedule validation rejects malformed persisted state.
+
 ## [0.1.0] - 2026-07-19
 
 ### Added
 
-- `/advice` and `/advice --tools` for a manual advisor review that restores the
-  advisee and promotes continuation.
-- `/advice-every <N>`, `/advice-every <N> --tools`, and `/advice-every off` for a
-  periodic low-level-turn cadence.
-- Global and trusted-project configuration merge with a `thinkingLevel` default
-  of `high`.
-- Process-local `/advice-every` schedule surviving idle `/reload` only.
-- Contextual autocomplete for `--tools` and `off`.
-- Manual `/advice` is rejected while steering messages are pending, and an
-  automatic threshold defers until the queue is empty, so an advisor never
-  runs under the wrong model (PLAN.md Amendment 1). The advisor is activated
-  before its prompt is queued; restoration happens before the continuation
-  turn's model snapshot.
+- Initial model reconsideration cycle with configuration, periodic cadence,
+  autocomplete, and reload-local scheduling.

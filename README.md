@@ -1,31 +1,11 @@
 # pi-advice
 
-Invite a configured **advisor** model to review an **advisee** model's current
-work, then hand control back so the advisee continues using that advice.
+`pi-advice` is a [Pi](https://pi.dev) extension that lets the assistant pause,
+reconsider its own current work with a configured model, then continue from that
+fresh realization.
 
-`pi-advice` is a [Pi](https://pi.dev) extension for interactive and autonomous
-work. A manual `/advice` review lets you unstick or redirect an advisee
-mid-flight; a periodic `/advice-every` cadence interrupts an advisee executing a
-long-running plan at safe steering boundaries, gets focused guidance, and pushes
-it back into execution.
-
-The advisor **advises**. It never takes over implementation, even when it is
-allowed to use the advisee's tools.
-
-## Why
-
-- **`/advice`** is the manual recovery mechanism when an advisee looks stuck,
-  misguided, or in need of a push. It hands the conversation to a configured
-  advisor for a focused review, then automatically restores and continues the
-  advisee.
-- **`/advice-every`** is primarily useful during autonomous, long-running work —
-  for example, a worker executing a plan. It periodically pauses the advisee at
-  the next safe Pi steering boundary, obtains advisor guidance, and resumes the
-  advisee so it keeps working with that guidance.
-
-Both commands finish their advice cycle by promoting continuation from the
-advisee. The advisor's response is not the final user-facing outcome of the
-cycle.
+The package is named `pi-advice`; the public commands are `/advise` and
+`/advise-every`.
 
 ## Install
 
@@ -35,13 +15,13 @@ From GitHub:
 pi install git:github.com/arcanemachine/pi-advice
 ```
 
-To update:
+Update it with:
 
 ```bash
 pi update git:github.com/arcanemachine/pi-advice
 ```
 
-For a temporary trial in the current run only:
+For a temporary trial in the current run:
 
 ```bash
 pi -e git:github.com/arcanemachine/pi-advice
@@ -55,21 +35,20 @@ cd pi-advice
 pi -e ./src/index.ts
 ```
 
-The package is source-loaded by Pi from `src/index.ts`; no compiled artifact is
-required. It is not yet published to npm.
+Pi source-loads `src/index.ts`; no compiled artifact is required. This package
+is not published to npm.
 
 ## Configuration
 
-`pi-advice` reads JSON configuration from two files and merges them: a global
-file and, for trusted projects, a project override. Project fields override
-matching global fields.
+`pi-advice` reads and merges these JSON files. Project fields override global
+fields, but only in a trusted project.
 
-| File                           | Scope                         |
-| ------------------------------ | ----------------------------- |
-| `~/.pi/agent/pi-advice.json`   | Global                        |
-| `<project>/.pi/pi-advice.json` | Trusted project override only |
+| File                           | Scope                    |
+| ------------------------------ | ------------------------ |
+| `~/.pi/agent/pi-advice.json`   | Global                   |
+| `<project>/.pi/pi-advice.json` | Trusted-project override |
 
-Global example:
+Example global configuration:
 
 ```json
 {
@@ -79,8 +58,7 @@ Global example:
 }
 ```
 
-Project override example (keeps the global provider and thinking level, selects
-a different model):
+A trusted project may override only selected fields:
 
 ```json
 {
@@ -88,135 +66,134 @@ a different model):
 }
 ```
 
-Fields:
+`provider` and `model` must be nonempty strings after merging.
+`thinkingLevel` defaults to `high` and must be one of `off`, `minimal`, `low`,
+`medium`, `high`, `xhigh`, or `max`. Unknown fields, malformed JSON, and invalid
+field types are rejected with a source-specific diagnostic.
 
-| Field           | Required | Description                                                                                                   |
-| --------------- | -------- | ------------------------------------------------------------------------------------------------------------- |
-| `provider`      | yes      | Provider id, e.g. `openai-codex` or `anthropic`.                                                              |
-| `model`         | yes      | Model id within the provider, e.g. `gpt-5.6-sol`.                                                             |
-| `thinkingLevel` | no       | Advisor thinking level. Defaults to `high`. One of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
-
-Never place credentials in `pi-advice.json`. Authentication stays owned by Pi's
-model registry — configure it with `/login <provider>`.
+Do not put credentials in `pi-advice.json`. Authenticate models through Pi, for
+example with `/login <provider>`.
 
 ## Commands
 
-### `/advice`
+### `/advise`
 
 ```text
-/advice
-/advice focus on whether the current approach matches the plan
-/advice --tools
-/advice --tools inspect the relevant implementation before advising
+/advise
+/advise focus on whether the current approach matches the plan
+/advise --tools
+/advise --tools inspect the relevant implementation before reconsidering
 ```
 
-- Bare `/advice` requests a generic advisor review with no tools.
-- Free-form text is additional focus for the advisor; it augments the base
-  review prompt.
-- `--tools` lets the advisor investigate with the advisee's active tool set.
-  Text after `--tools` is optional focus.
-- `/advice` is not queued behind other steering messages: if steering messages
-  are already pending, the request is reported and rejected so it can never run
-  under the wrong model. Wait for them to finish, then retry.
+`/advise` starts one reconsideration cycle. Pi shows exactly one notification:
 
-Autocomplete offers `--tools` at the leading option position.
+- `Advising...` without focus
+- `Advising: <focus>` with trimmed focus
 
-### `/advice-every`
+The reconsideration and continuation instructions are hidden custom messages:
+they do not appear in the normal chat transcript. They do remain in session and
+LLM context, and Pi converts them to LLM-compatible user messages internally.
+The visible response is intended to read as the assistant's own fresh
+realization, followed by normal continuation from that realization.
+
+A cycle is rejected while another cycle is active. It is also rejected when
+steering messages are already pending, so the reconsideration cannot run under
+the wrong model. If steering arrives during asynchronous activation, the cycle
+is cancelled and the original state is restored.
+
+Autocomplete offers `--tools` in the leading argument position.
+
+### `/advise-every`
 
 ```text
-/advice-every 50
-/advice-every 50 focus on correctness and overlooked risks
-/advice-every 50 --tools
-/advice-every 50 --tools inspect the relevant implementation first
-/advice-every off
+/advise-every 50
+/advise-every 50 focus on correctness and overlooked risks
+/advise-every 50 --tools
+/advise-every 50 --tools inspect the relevant implementation first
+/advise-every off
 ```
 
-- `<N>` is a positive integer. The cadence counts **low-level advisee turns** —
-  each assistant response plus its tool calls and tool results (Pi's `turn_end`),
-  not full user/agent exchanges. Advisor turns and the generated advisee
-  continuation turn are excluded from the count.
-- At the Nth counted turn, an automatic advisor review is queued as a steering
-  message at the next safe boundary before the advisee's next model call. If
-  other steering messages are pending at the threshold, the automatic review is
-  deferred until the queue is empty, so it is never delivered under the wrong
-  model. Existing queued steering messages keep their order.
-- Reissuing `/advice-every N ...` replaces the schedule and resets the counter.
-- `/advice-every off` disables future automatic reviews and clears the
-  schedule. An active cycle is allowed to finish.
+`<N>` is a positive safe integer. The cadence counts low-level original-model
+turns: every assistant response plus its tool calls/results at Pi's `turn_end`.
+It excludes reconsideration turns, queued interstitial turns, and the generated
+continuation turn.
 
-Malformed input shows concise usage with the examples above. Autocomplete
-offers `off` at the first position and `--tools` after a valid interval.
+At the Nth qualifying turn, a cycle begins at the next safe steering boundary.
+If messages are pending at the threshold, the count remains saturated at N and
+reconsideration waits until a later queue-empty qualifying boundary. Pending
+messages before the threshold do not accelerate the counter. Reissuing the
+command replaces the schedule and resets its count. `off` disables future
+cycles but lets an active cycle restore safely.
 
-## Tool-free versus `--tools`
+Autocomplete offers `off` initially and `--tools` after a valid interval.
 
-- **Tool-free** (default): the advisor's active tool set is set to empty and the
-  advisor is told not to call or request tools. It answers from the conversation
-  context already in the session.
-- **`--tools`**: the advisor keeps the advisee's active tool set, but is told to
-  use tools only to investigate, make the minimum reasonable number of calls,
-  and return promptly. It must not modify the project, execute the plan, or
-  perform the advisee's work.
+## Tools
 
-The no-modification rule is prompt-level guidance, not a technical sandbox. Do
-not assume arbitrary tools are read-only.
+Tool-free cycles are the default. `pi-advice` temporarily sets the active tool
+list to empty and asks the model to reconsider from conversation context.
 
-## How an advice cycle works
+`--tools` preserves the exact active tool-name set captured from the original
+model. The prompt permits only minimal investigation and prohibits modifying
+the project, executing the plan, or performing the substantive implementation
+work during reconsideration. That is prompt guidance, not a technical sandbox:
+active tools may still be capable of modification.
 
-Before the advisor prompt is queued, `pi-advice` snapshots the advisee's exact
-model, thinking level, and active tool set, switches to the configured advisor,
-applies the configured thinking level and the cycle's tool policy, and then
-sends the advisor prompt as a visible user message. (The model switch is made
-before queueing because Pi freezes the next low-level turn's model from agent
-state just after the previous `turn_end`.) If the advisee is mid-response, its
-current turn finishes under the advisee; the advisor takes the turn that
-follows. When the advisor finishes, `pi-advice` restores the exact advisee
-model, thinking level, and tools and sends a visible continuation message that
-tells the advisee to act on the advice rather than merely acknowledge it.
+## Steering requirement
 
-A second advice request while a cycle is queued or active is rejected. The
-advisor never advises itself. On advisor failure, abort, or an empty response,
-the advisee is restored and no continuation is sent.
+`pi-advice` supports Pi's default `steeringMode: "one-at-a-time"` only (including
+an unset setting, which defaults to it). `steeringMode: "all"` is unsupported:
+it can batch later user steering with a hidden reconsideration message into one
+provider call, preventing exact model isolation. Pi 0.82.1 does not expose this
+mode through the public extension context, so `pi-advice` cannot detect or
+enforce the setting.
 
-## Reload and session lifetime
+## State restoration and reload
 
-The active `/advice-every` schedule survives idle `/reload` (the same Pi process
-re-evaluates the extension, and the schedule lives on a process-global object),
-so edits to configuration take effect after a reload. It does **not** survive a
-Pi process restart, and it does not carry across `/new`, `/resume`, `/fork`, or
-`/clone`: those clear it.
+Before a cycle, the extension snapshots the original model, thinking level, and
+active tool names. It activates the configured reconsideration model before
+queueing its hidden message, because Pi snapshots next-turn state before queued
+messages emit `message_start`. When reconsideration finishes, it restores the
+snapshot before queueing hidden continuation.
 
-Pi refuses `/reload` while a response is streaming; `pi-advice` does not
-override that built-in behavior.
+If the reconsideration errors, aborts, or produces no usable response, the
+extension restores state and sends no continuation. If exact restoration fails,
+it sends no continuation, disables automatic advice, and asks you to select the
+intended model manually with `/model`.
+
+The `/advise-every` schedule survives an idle `/reload` in the same Pi process
+via a versioned process-global object. It does not survive process restart and
+is cleared on `/new`, `/resume`, `/fork`, or `/clone`. Reload revalidates
+configuration. Pi's existing reload restriction still applies: wait for the
+current response to finish before reloading.
 
 ## Troubleshooting
 
-- **"Advisor model ... not found."** — the configured `provider`/`model` is not
-  available. Check the spelling and that the provider is registered (see
-  `/model` or `pi --list-models`).
-- **"No API key configured for ...".** — run `/login <provider>` to authenticate.
-- **"Advisor configuration is invalid: ..."** — `pi-advice.json` is malformed or
-  missing required fields. The message names the offending field and source.
+- **Advisor model not found**: check the configured provider/model with `/model`
+  or `pi --list-models`.
+- **No API key configured**: authenticate using `/login <provider>`.
+- **Configuration invalid**: correct the named file/field, then use `/reload`.
+- **Failed to restore original state**: select the intended model manually with
+  `/model`; automatic advice has been disabled for safety.
 
 ## Security
 
-Extensions run with your full system permissions and can execute arbitrary code.
-Only install `pi-advice` from a source you trust. The advisor can read the
-conversation; with `--tools` it also gains the advisee's active tool set, which
-can modify the project.
+Extensions run with your full system permissions. Install `pi-advice` only from
+a source you trust. A configured reconsideration model receives conversation
+context; with `--tools`, it also receives the active tools.
 
 ## Development
 
 ```bash
 npm install
+npm run format:check
 npm run typecheck
 npm run test
 npm run build
 npm run format
 ```
 
-Tests use Vitest and exercise behavior with a fake Pi harness; no model
-requests or network calls are made. Verify user-facing changes against a running
-Pi session before release.
+Tests use a runtime-faithful fake Pi harness and make no model requests. Before
+release, also verify the user-facing behavior in a running Pi session.
 
 ## License
 
