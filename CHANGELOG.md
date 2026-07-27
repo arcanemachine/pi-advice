@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   continuation from that realization.
 - Replaced visible control prompts with hidden custom messages and added the
   `Advising...` / `Advising: <focus>` start notification.
+- Shows `Advising... 🧠 ` as Pi's working message while reconsideration is
+  actively streaming, including authorized advisor tool investigation.
 - Documented support for default `steeringMode: "one-at-a-time"` only.
 
 ### Fixed

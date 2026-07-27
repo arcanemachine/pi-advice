@@ -41,6 +41,8 @@ Verify user-facing changes against a running Pi session before release.
 - The reconsidering model may investigate only with `--tools`; it must not
   implement during reconsideration. Restoration failure must never queue a
   continuation.
+- Set Pi's `Advising... 🧠 ` working message only when the exact hidden review
+  message starts; clear it before restoration/continuation and during shutdown.
 
 ## Commit style
 

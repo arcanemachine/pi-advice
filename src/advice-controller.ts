@@ -22,6 +22,7 @@ export type AdvisorModel = NonNullable<ReturnType<ModelRegistry["find"]>>;
 
 export const REVIEW_MESSAGE_TYPE = "pi-advice.review.v1";
 export const CONTINUATION_MESSAGE_TYPE = "pi-advice.continue.v1";
+export const ADVISOR_WORKING_MESSAGE = "Advising... 🧠 ";
 
 export type Phase =
   | "idle"
@@ -76,6 +77,7 @@ export interface AdviceDeps {
   hasPendingMessages(): boolean;
 
   notify(message: string, level: NotifyLevel): void;
+  setWorkingMessage(message?: string): void;
   getSessionId(): string;
 }
 
@@ -130,8 +132,21 @@ function sameModel(
 export class AdviceController {
   private phase: Phase = "idle";
   private cycle: AdviceCycle | null = null;
+  private ownsWorkingMessage = false;
 
   constructor(private readonly deps: AdviceDeps) {}
+
+  private showAdvisorWorking(): void {
+    if (this.ownsWorkingMessage) return;
+    this.deps.setWorkingMessage(ADVISOR_WORKING_MESSAGE);
+    this.ownsWorkingMessage = true;
+  }
+
+  private clearAdvisorWorking(): void {
+    if (!this.ownsWorkingMessage) return;
+    this.deps.setWorkingMessage();
+    this.ownsWorkingMessage = false;
+  }
 
   /** `/advise` command body. */
   async handleAdvise(args: string): Promise<void> {
@@ -381,12 +396,13 @@ export class AdviceController {
     const text = messageText(message.content);
 
     if (
-      this.phase === "adviceQueued" &&
+      (this.phase === "adviceQueued" || this.phase === "advisorActive") &&
       this.cycle &&
       message.customType === REVIEW_MESSAGE_TYPE &&
       text === this.cycle.advisorPrompt
     ) {
       this.phase = "advisorActive";
+      this.showAdvisorWorking();
       return;
     }
     if (
@@ -422,6 +438,7 @@ export class AdviceController {
     if (!cycle) return;
 
     if (message.stopReason === "error" || message.stopReason === "aborted") {
+      this.clearAdvisorWorking();
       const restored = await this.restoreAdvisee();
       if (restored) {
         this.deps.notify(
@@ -439,6 +456,7 @@ export class AdviceController {
     }
 
     if (!assistantHasText(message)) {
+      this.clearAdvisorWorking();
       const restored = await this.restoreAdvisee();
       if (restored) {
         this.deps.notify(
@@ -451,6 +469,7 @@ export class AdviceController {
       return;
     }
 
+    this.clearAdvisorWorking();
     const restored = await this.restoreAdvisee();
     if (!restored) {
       this.phase = "idle";
@@ -514,6 +533,7 @@ export class AdviceController {
   }
 
   onSessionStart(event: SessionStartEvent): void {
+    this.clearAdvisorWorking();
     const sessionId = this.deps.getSessionId();
     if (event.reason === "reload") {
       this.phase = "idle";
@@ -536,6 +556,7 @@ export class AdviceController {
   }
 
   async onSessionShutdown(event: SessionShutdownEvent): Promise<void> {
+    this.clearAdvisorWorking();
     if (event.reason === "reload") return;
 
     clearSchedule();

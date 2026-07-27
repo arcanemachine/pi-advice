@@ -34,6 +34,7 @@ export default function piAdvice(pi: ExtensionAPI): void {
     isIdle: () => ctx().isIdle(),
     hasPendingMessages: () => ctx().hasPendingMessages(),
     notify: (message, level) => ctx().ui.notify(message, level),
+    setWorkingMessage: (message) => ctx().ui.setWorkingMessage(message),
     getSessionId: () => ctx().sessionManager.getSessionId(),
   };
 

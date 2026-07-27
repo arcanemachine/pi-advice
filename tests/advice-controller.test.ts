@@ -7,6 +7,7 @@ import type {
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+  ADVISOR_WORKING_MESSAGE,
   AdviceController,
   CONTINUATION_MESSAGE_TYPE,
   REVIEW_MESSAGE_TYPE,
@@ -67,6 +68,7 @@ class RuntimeHarness {
   thinkingSet: ThinkingLevel[] = [];
   toolsSet: string[][] = [];
   notifies: { message: string; level: NotifyLevel }[] = [];
+  workingMessages: Array<string | undefined> = [];
   controller!: AdviceController;
 
   reset(): void {
@@ -99,6 +101,7 @@ class RuntimeHarness {
     this.thinkingSet = [];
     this.toolsSet = [];
     this.notifies = [];
+    this.workingMessages = [];
     this.controller = new AdviceController(this.deps);
   }
 
@@ -146,6 +149,7 @@ class RuntimeHarness {
       isIdle: () => this.idle,
       hasPendingMessages: () => this.userPending > 0,
       notify: (message, level) => this.notifies.push({ message, level }),
+      setWorkingMessage: (message) => this.workingMessages.push(message),
       getSessionId: () => this.sessionId,
     };
   }
@@ -258,6 +262,7 @@ describe("manual /advise", () => {
     expect(harness.toolsSet).toEqual([[]]);
     expect(harness.phase()).toBe("advisorActive");
     expect(harness.loop.model).toBe(ADVISOR);
+    expect(harness.workingMessages).toEqual([]);
     expect(harness.lastNotify()).toEqual({
       message: "Advising...",
       level: "info",
@@ -273,8 +278,14 @@ describe("manual /advise", () => {
 
     const review = await harness.deliverNext();
     expect(review.content).toContain("Recommended next action(s):");
+    expect(harness.workingMessages).toEqual([ADVISOR_WORKING_MESSAGE]);
+    expect(ADVISOR_WORKING_MESSAGE.endsWith(" ")).toBe(true);
     await harness.runTurn({ stopReason: "stop", text: "I just realized X." });
 
+    expect(harness.workingMessages).toEqual([
+      ADVISOR_WORKING_MESSAGE,
+      undefined,
+    ]);
     expect(harness.setModelCalls).toEqual([ADVISOR, ADVISEE]);
     expect(harness.thinkingSet).toEqual(["high", "medium"]);
     expect(harness.toolsSet).toEqual([[], ["read", "bash"]]);
@@ -360,9 +371,11 @@ describe("streaming and snapshot boundary", () => {
     await harness.runTurn({ stopReason: "stop", text: "tail" });
     expect(harness.phase()).toBe("adviceQueued");
     expect(harness.loop.model).toBe(ADVISOR);
+    expect(harness.workingMessages).toEqual([]);
 
     await harness.deliverNext();
     expect(harness.phase()).toBe("advisorActive");
+    expect(harness.workingMessages).toEqual([ADVISOR_WORKING_MESSAGE]);
     await harness.runTurn({ stopReason: "stop", text: "realization" });
     expect(harness.loop.model).toBe(ADVISEE);
     expect(harness.phase()).toBe("continuationQueued");
@@ -384,6 +397,8 @@ describe("streaming and snapshot boundary", () => {
     expect(harness.phase()).toBe("adviceQueued");
     await harness.deliverNext();
     expect(harness.phase()).toBe("advisorActive");
+    await harness.controller.onMessageStart(customStart(actual));
+    expect(harness.workingMessages).toEqual([ADVISOR_WORKING_MESSAGE]);
   });
 
   it("ignores ordinary user messages for control transitions", async () => {
@@ -464,11 +479,17 @@ describe("review completion and tool policy", () => {
     const harness = setup();
     await harness.controller.handleAdvise("--tools");
     await harness.deliverNext();
+    expect(harness.workingMessages).toEqual([ADVISOR_WORKING_MESSAGE]);
     await harness.runTurn({ stopReason: "toolUse", text: "investigating" });
     expect(harness.phase()).toBe("advisorActive");
+    expect(harness.workingMessages).toEqual([ADVISOR_WORKING_MESSAGE]);
     expect(harness.setModelCalls).toEqual([ADVISOR]);
     await harness.runTurn({ stopReason: "stop", text: "realization" });
     expect(harness.phase()).toBe("continuationQueued");
+    expect(harness.workingMessages).toEqual([
+      ADVISOR_WORKING_MESSAGE,
+      undefined,
+    ]);
   });
 
   it("finalizes a tool-free toolUse response when it has usable text", async () => {
@@ -477,6 +498,10 @@ describe("review completion and tool policy", () => {
     await harness.deliverNext();
     await harness.runTurn({ stopReason: "toolUse", text: "realization" });
     expect(harness.setModelCalls).toEqual([ADVISOR, ADVISEE]);
+    expect(harness.workingMessages).toEqual([
+      ADVISOR_WORKING_MESSAGE,
+      undefined,
+    ]);
     expect(harness.phase()).toBe("continuationQueued");
   });
 
@@ -486,6 +511,10 @@ describe("review completion and tool policy", () => {
     await harness.deliverNext();
     await harness.runTurn({ stopReason: "toolUse", text: "" });
     expect(harness.sent).toHaveLength(1);
+    expect(harness.workingMessages).toEqual([
+      ADVISOR_WORKING_MESSAGE,
+      undefined,
+    ]);
     expect(harness.phase()).toBe("idle");
     expect(harness.lastNotify()?.level).toBe("warning");
   });
@@ -498,6 +527,10 @@ describe("review completion and tool policy", () => {
       await harness.deliverNext();
       await harness.runTurn({ stopReason });
       expect(harness.sent).toHaveLength(1);
+      expect(harness.workingMessages).toEqual([
+        ADVISOR_WORKING_MESSAGE,
+        undefined,
+      ]);
       expect(harness.live.model).toBe(ADVISEE);
       expect(harness.phase()).toBe("idle");
     },
@@ -509,6 +542,10 @@ describe("review completion and tool policy", () => {
     await harness.deliverNext();
     await harness.runTurn({ stopReason: "stop", text: "" });
     expect(harness.sent).toHaveLength(1);
+    expect(harness.workingMessages).toEqual([
+      ADVISOR_WORKING_MESSAGE,
+      undefined,
+    ]);
     expect(harness.phase()).toBe("idle");
   });
 
@@ -712,17 +749,24 @@ describe("FIFO continuation and lifecycle", () => {
       type: "session_shutdown",
       reason: "quit",
     } as unknown as SessionShutdownEvent);
+    expect(harness.workingMessages).toEqual([]);
     expect(harness.setModelCalls).toEqual([ADVISOR, ADVISEE]);
     expect(harness.phase()).toBe("idle");
   });
 
-  it("leaves the process schedule intact on reload shutdown", async () => {
+  it("clears the working message on reload shutdown while preserving schedule", async () => {
     const harness = setup();
     harness.controller.handleAdviseEvery("3");
+    await harness.controller.handleAdvise("");
+    await harness.deliverNext();
     await harness.controller.onSessionShutdown({
       type: "session_shutdown",
       reason: "reload",
     } as unknown as SessionShutdownEvent);
+    expect(harness.workingMessages).toEqual([
+      ADVISOR_WORKING_MESSAGE,
+      undefined,
+    ]);
     expect(harness.controller.currentSchedule()?.every).toBe(3);
   });
 });
