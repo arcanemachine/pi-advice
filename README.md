@@ -4,12 +4,11 @@
   <img src="https://raw.githubusercontent.com/arcanemachine/pi-advice/main/logo.png" alt="pi-advice logo" width="250" />
 </p>
 
-`pi-advice` is a [Pi](https://pi.dev) extension that lets the assistant pause,
-reconsider its own current work with a configured model, then continue from that
-fresh realization.
+`pi-advice` is a [Pi](https://pi.dev) extension that lets the assistant pause, reconsider its own current work with a configured model (typically a more powerful model), then continue from that fresh realization.
 
-The package is named `pi-advice`; the public commands are `/advise` and
-`/advise-every`.
+This extension may be useful to help get a weaker model unstuck, or to provide additional information from a more powerful model before continuing with a task.
+
+The package is named `pi-advice`; the public commands are `/advise` and `/advise-every`.
 
 ## Install
 
