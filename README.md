@@ -88,17 +88,12 @@ example with `/login <provider>`.
 /advise --tools inspect the relevant implementation before reconsidering
 ```
 
-`/advise` starts one reconsideration cycle. Pi shows exactly one notification:
-
-- `Advising...` without focus
-- `Advising: <focus>` with trimmed focus
-
-When the hidden reconsideration response is actively streaming, Pi's working
-message becomes `Advising... 🧠 ` and returns to Pi's default before the restored
-model continues. The intentional trailing space is passed to Pi, although a
-terminal may not render it distinctly. The working message remains active
-through an authorized `--tools` investigation, but not while a cycle is merely
-queued behind another turn.
+`/advise` starts one reconsideration cycle. When the hidden reconsideration
+response is actively streaming, Pi's working message becomes `Advising... 🧠 `
+and returns to Pi's default before the restored model continues. The intentional
+trailing space is passed to Pi, although a terminal may not render it distinctly.
+The working message remains active through an authorized `--tools` investigation,
+but not while a cycle is merely queued behind another turn.
 
 The reconsideration and continuation instructions are hidden custom messages:
 they do not appear in the normal chat transcript. They do remain in session and

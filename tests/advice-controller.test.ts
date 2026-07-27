@@ -263,10 +263,7 @@ describe("manual /advise", () => {
     expect(harness.phase()).toBe("advisorActive");
     expect(harness.loop.model).toBe(ADVISOR);
     expect(harness.workingMessages).toEqual([]);
-    expect(harness.lastNotify()).toEqual({
-      message: "Advising...",
-      level: "info",
-    });
+    expect(harness.notifies).toEqual([]);
     expect(harness.sent[0]).toEqual({
       message: {
         customType: REVIEW_MESSAGE_TYPE,
@@ -307,13 +304,13 @@ describe("manual /advise", () => {
     expect(harness.loop.model).toBe(ADVISEE);
   });
 
-  it("uses the trimmed focus in the exact start notification", async () => {
+  it("passes trimmed focus only to the hidden review prompt", async () => {
     const harness = setup();
     await harness.controller.handleAdvise("  focus on the race  ");
-    expect(harness.lastNotify()).toEqual({
-      message: "Advising: focus on the race",
-      level: "info",
-    });
+    expect(harness.notifies).toEqual([]);
+    expect(harness.sent[0]?.message.content).toContain(
+      "Focus for this reconsideration:\nfocus on the race",
+    );
   });
 
   it("preserves the exact active tools only with --tools", async () => {

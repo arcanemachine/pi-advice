@@ -281,11 +281,6 @@ export class AdviceController {
 
     const wasIdle = this.deps.isIdle();
     this.phase = wasIdle ? "advisorActive" : "adviceQueued";
-    this.deps.notify(
-      focus === "" ? "Advising..." : `Advising: ${focus}`,
-      "info",
-    );
-
     try {
       this.deps.sendMessage(
         {
