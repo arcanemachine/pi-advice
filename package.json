@@ -15,7 +15,8 @@
   "pi": {
     "extensions": [
       "./src/index.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/arcanemachine/pi-advice/main/logo.png"
   },
   "scripts": {
     "build": "tsc --noEmit",

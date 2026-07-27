@@ -1,5 +1,9 @@
 # pi-advice
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/arcanemachine/pi-advice/main/logo.png" alt="pi-advice logo" width="250" />
+</p>
+
 `pi-advice` is a [Pi](https://pi.dev) extension that lets the assistant pause,
 reconsider its own current work with a configured model, then continue from that
 fresh realization.
