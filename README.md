@@ -89,7 +89,7 @@ example with `/login <provider>`.
 ```
 
 `/advise` starts one reconsideration cycle. When the hidden reconsideration
-response is actively streaming, Pi's working message becomes `Advising... 🧠 `
+response is actively streaming, Pi's working message becomes `Advising...`
 and returns to Pi's default before the restored model continues. The intentional
 trailing space is passed to Pi, although a terminal may not render it distinctly.
 The working message remains active through an authorized `--tools` investigation,

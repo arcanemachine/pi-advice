@@ -22,7 +22,7 @@ export type AdvisorModel = NonNullable<ReturnType<ModelRegistry["find"]>>;
 
 export const REVIEW_MESSAGE_TYPE = "pi-advice.review.v1";
 export const CONTINUATION_MESSAGE_TYPE = "pi-advice.continue.v1";
-export const ADVISOR_WORKING_MESSAGE = "Advising... 🧠 ";
+export const ADVISOR_WORKING_MESSAGE = "Advising...";
 
 export type Phase =
   | "idle"
