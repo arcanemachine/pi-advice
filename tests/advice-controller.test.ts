@@ -251,7 +251,7 @@ function makeTurnEnd(options: {
 beforeEach(() => resetProcessState());
 
 describe("manual /advise", () => {
-  it("runs an idle tool-free cycle with hidden messages and exact notification", async () => {
+  it("runs an idle tool-free cycle with hidden messages and working indicator", async () => {
     const harness = setup();
     harness.live.tools = ["read", "bash"];
 
@@ -276,7 +276,7 @@ describe("manual /advise", () => {
     const review = await harness.deliverNext();
     expect(review.content).toContain("Recommended next action(s):");
     expect(harness.workingMessages).toEqual([ADVISOR_WORKING_MESSAGE]);
-    expect(ADVISOR_WORKING_MESSAGE.endsWith(" ")).toBe(true);
+    expect(ADVISOR_WORKING_MESSAGE).toBe("Advising...");
     await harness.runTurn({ stopReason: "stop", text: "I just realized X." });
 
     expect(harness.workingMessages).toEqual([
