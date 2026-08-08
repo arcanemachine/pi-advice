@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Command descriptions now state that trailing text sets focus and `--tools`
+  enables investigation.
 - Renamed public commands from `/advice` and `/advice-every` to `/advise` and
   `/advise-every`.
 - Reframed reconsideration as the assistant's own fresh realization and hidden

@@ -45,7 +45,7 @@ export default function piAdvice(pi: ExtensionAPI): void {
 
   pi.registerCommand("advise", {
     description:
-      "Reconsider the assistant's current work with a configured model, then continue",
+      "Reconsider current work; trailing text sets focus, --tools enables investigation",
     getArgumentCompletions: adviseCompletions,
     handler: async (args, commandContext: ExtensionCommandContext) => {
       setCtx(commandContext);
@@ -55,7 +55,7 @@ export default function piAdvice(pi: ExtensionAPI): void {
 
   pi.registerCommand("advise-every", {
     description:
-      "Enable, replace, or disable periodic reconsideration ('off' to disable)",
+      "Schedule periodic reconsideration; trailing text sets focus, --tools enables investigation, off disables",
     getArgumentCompletions: adviseEveryCompletions,
     handler: async (args, commandContext: ExtensionCommandContext) => {
       setCtx(commandContext);
