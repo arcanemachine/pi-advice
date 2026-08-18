@@ -8,9 +8,17 @@
 
 This extension may be useful to help get a weaker model unstuck, or to provide additional information from a more powerful model before continuing with a task.
 
+> Like this extension? See [my other Pi extensions](https://github.com/arcanemachine/pi-projects).
+
 The package is named `pi-advice`; the public commands are `/advise` and `/advise-every`.
 
 ## Install
+
+From npm:
+
+```bash
+pi install npm:@arcanemachine/pi-advice
+```
 
 From GitHub:
 
@@ -38,8 +46,7 @@ cd pi-advice
 pi -e ./src/index.ts
 ```
 
-Pi source-loads `src/index.ts`; no compiled artifact is required. This package
-is not published to npm.
+Pi source-loads `src/index.ts`; no compiled artifact is required.
 
 ## Configuration
 
