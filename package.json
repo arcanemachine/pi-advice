@@ -1,6 +1,6 @@
 {
   "name": "@arcanemachine/pi-advice",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Step back from current work to reconsider it with a configured model, then continue the same work.",
   "type": "module",
   "keywords": [
@@ -16,7 +16,7 @@
     "extensions": [
       "./src/index.ts"
     ],
-    "image": "https://raw.githubusercontent.com/arcanemachine/pi-advice/main/logo.png"
+    "image": "https://raw.githubusercontent.com/arcanemachine/pi-advice/main/logo.jpg"
   },
   "scripts": {
     "build": "tsc --noEmit",
