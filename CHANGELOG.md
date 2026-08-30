@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-08-30
+
 ### Changed
 
 - Command descriptions now state that trailing text sets focus and `--tools`
@@ -42,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configuration validation now validates each source before merging and reports
   malformed files and invalid fields without throwing.
 - Process-global schedule validation rejects malformed persisted state.
+- Cancelling advice before it starts now restores the original state and clears the active cycle.
 
 ## [0.1.0] - 2026-07-19
 

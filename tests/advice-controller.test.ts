@@ -378,6 +378,28 @@ describe("streaming and snapshot boundary", () => {
     expect(harness.phase()).toBe("continuationQueued");
   });
 
+  it("clears a queued cycle when the active turn is aborted before review starts", async () => {
+    const harness = setup();
+    harness.idle = false;
+
+    await harness.controller.handleAdvise("");
+    expect(harness.phase()).toBe("adviceQueued");
+    harness.customQueue = [];
+
+    await harness.runTurn({ stopReason: "aborted", text: "" });
+
+    expect(harness.phase()).toBe("idle");
+    expect(harness.controller.hasCycle()).toBe(false);
+    expect(harness.live.model).toBe(ADVISEE);
+    expect(harness.lastNotify()?.message).toMatch(
+      /Advice was cancelled before it started/,
+    );
+
+    await harness.controller.handleAdvise("");
+    expect(harness.setModelCalls).toEqual([ADVISOR, ADVISEE, ADVISOR]);
+    expect(harness.phase()).toBe("adviceQueued");
+  });
+
   it("requires exact custom type and content to transition queued phases", async () => {
     const harness = setup();
     harness.idle = false;

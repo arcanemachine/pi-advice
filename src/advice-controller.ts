@@ -414,6 +414,24 @@ export class AdviceController {
     const message = event.message;
     if (message.role !== "assistant") return;
 
+    if (this.phase === "adviceQueued" && message.stopReason === "aborted") {
+      // Interactive cancellation removes the queued review before aborting the
+      // current turn. Keep the cycle only when another queued message remains.
+      if (this.deps.hasPendingMessages()) return;
+
+      this.clearAdvisorWorking();
+      const restored = await this.restoreAdvisee();
+      if (restored) {
+        this.deps.notify(
+          "Advice was cancelled before it started. Original state was restored.",
+          "info",
+        );
+      }
+      this.phase = "idle";
+      this.cycle = null;
+      return;
+    }
+
     if (this.phase === "advisorActive") {
       await this.handleAdvisorTurnEnd(message as AssistantMessage);
       return;
