@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-08-30
+
+### Fixed
+
+- Updated the advice cancellation notification to use advice terminology.
+
 ## [0.1.3] - 2026-08-30
 
 ### Changed

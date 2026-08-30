@@ -454,10 +454,7 @@ export class AdviceController {
       this.clearAdvisorWorking();
       const restored = await this.restoreAdvisee();
       if (restored) {
-        this.deps.notify(
-          "The reconsideration failed or was aborted. Original state was restored; no continuation was sent.",
-          "error",
-        );
+        this.deps.notify("Error: Advice failed or was cancelled.", "error");
       }
       this.phase = "idle";
       this.cycle = null;
