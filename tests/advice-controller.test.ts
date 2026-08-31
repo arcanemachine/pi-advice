@@ -7,6 +7,7 @@ import type {
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+  ADVICE_REQUEST_MESSAGE,
   ADVISOR_WORKING_MESSAGE,
   AdviceController,
   CONTINUATION_MESSAGE_TYPE,
@@ -263,7 +264,9 @@ describe("manual /advise", () => {
     expect(harness.phase()).toBe("advisorActive");
     expect(harness.loop.model).toBe(ADVISOR);
     expect(harness.workingMessages).toEqual([]);
-    expect(harness.notifies).toEqual([]);
+    expect(harness.notifies).toEqual([
+      { message: ADVICE_REQUEST_MESSAGE, level: "info" },
+    ]);
     expect(harness.sent[0]).toEqual({
       message: {
         customType: REVIEW_MESSAGE_TYPE,
@@ -307,7 +310,9 @@ describe("manual /advise", () => {
   it("passes trimmed focus only to the hidden review prompt", async () => {
     const harness = setup();
     await harness.controller.handleAdvise("  focus on the race  ");
-    expect(harness.notifies).toEqual([]);
+    expect(harness.notifies).toEqual([
+      { message: ADVICE_REQUEST_MESSAGE, level: "info" },
+    ]);
     expect(harness.sent[0]?.message.content).toContain(
       "Focus for this reconsideration:\nfocus on the race",
     );

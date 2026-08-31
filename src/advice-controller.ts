@@ -23,6 +23,8 @@ export type AdvisorModel = NonNullable<ReturnType<ModelRegistry["find"]>>;
 export const REVIEW_MESSAGE_TYPE = "pi-advice.review.v1";
 export const CONTINUATION_MESSAGE_TYPE = "pi-advice.continue.v1";
 export const ADVISOR_WORKING_MESSAGE = "Advising...";
+export const ADVICE_REQUEST_MESSAGE =
+  "Requesting advice from the configured advisor...";
 
 export type Phase =
   | "idle"
@@ -164,11 +166,14 @@ export class AdviceController {
       return;
     }
 
-    await this.startCycle({
+    const outcome = await this.startCycle({
       tools: parsed.tools,
       context: parsed.context,
       source: "manual",
     });
+    if (outcome === "started") {
+      this.deps.notify(ADVICE_REQUEST_MESSAGE, "info");
+    }
   }
 
   /** `/advise-every` command body. */

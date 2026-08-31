@@ -95,8 +95,9 @@ example with `/login <provider>`.
 /advise --tools inspect the relevant implementation before reconsidering
 ```
 
-`/advise` starts one reconsideration cycle. When the hidden reconsideration
-response is actively streaming, Pi's working message becomes `Advising...`
+`/advise` starts one reconsideration cycle and notifies you when the request is
+queued. When the hidden reconsideration response is actively streaming, Pi's
+working message becomes `Advising...`
 and returns to Pi's default before the restored model continues. The working
 message remains active through an authorized `--tools` investigation, but not
 while a cycle is merely queued behind another turn.
