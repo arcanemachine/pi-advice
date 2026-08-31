@@ -557,6 +557,10 @@ describe("review completion and tool policy", () => {
       ]);
       expect(harness.live.model).toBe(ADVISEE);
       expect(harness.phase()).toBe("idle");
+      expect(harness.lastNotify()).toEqual({
+        message: "Advice failed or was cancelled.",
+        level: "error",
+      });
     },
   );
 

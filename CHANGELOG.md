@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `/advise` now notifies when a reconsideration request is queued.
 
+### Fixed
+
+- Removed the duplicated `Error:` prefix from advice failure notifications.
+
 ## [0.1.4] - 2026-08-30
 
 ### Fixed

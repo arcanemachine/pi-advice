@@ -459,7 +459,7 @@ export class AdviceController {
       this.clearAdvisorWorking();
       const restored = await this.restoreAdvisee();
       if (restored) {
-        this.deps.notify("Error: Advice failed or was cancelled.", "error");
+        this.deps.notify("Advice failed or was cancelled.", "error");
       }
       this.phase = "idle";
       this.cycle = null;
