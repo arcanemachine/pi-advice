@@ -1,6 +1,6 @@
 {
   "name": "@arcanemachine/pi-advice",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Step back from current work to reconsider it with a configured model, then continue the same work.",
   "type": "module",
   "keywords": [
