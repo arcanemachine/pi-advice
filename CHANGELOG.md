@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Consolidated persistent configuration into the `pi-advice` namespace in Pi's
+  global or trusted-project `settings.json`; standalone `pi-advice.json` files
+  are no longer read.
+
 ## [0.1.5] - 2026-08-31
 
 ### Added

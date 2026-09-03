@@ -50,21 +50,23 @@ Pi source-loads `src/index.ts`; no compiled artifact is required.
 
 ## Configuration
 
-`pi-advice` reads and merges these JSON files. Project fields override global
-fields, but only in a trusted project.
+`pi-advice` reads its `pi-advice` namespace from Pi's `settings.json` files.
+Project fields override matching global fields, but only in a trusted project.
 
-| File                           | Scope                    |
-| ------------------------------ | ------------------------ |
-| `~/.pi/agent/pi-advice.json`   | Global                   |
-| `<project>/.pi/pi-advice.json` | Trusted-project override |
+| File                          | Scope                    |
+| ----------------------------- | ------------------------ |
+| `~/.pi/agent/settings.json`   | Global                   |
+| `<project>/.pi/settings.json` | Trusted-project override |
 
 Example global configuration:
 
 ```json
 {
-  "provider": "openai-codex",
-  "model": "gpt-5.6-sol",
-  "thinkingLevel": "high"
+  "pi-advice": {
+    "provider": "openai-codex",
+    "model": "gpt-5.6-sol",
+    "thinkingLevel": "high"
+  }
 }
 ```
 
@@ -72,7 +74,9 @@ A trusted project may override only selected fields:
 
 ```json
 {
-  "model": "gpt-5.6-terra"
+  "pi-advice": {
+    "model": "gpt-5.6-terra"
+  }
 }
 ```
 
@@ -81,7 +85,7 @@ A trusted project may override only selected fields:
 `medium`, `high`, `xhigh`, or `max`. Unknown fields, malformed JSON, and invalid
 field types are rejected with a source-specific diagnostic.
 
-Do not put credentials in `pi-advice.json`. Authenticate models through Pi, for
+Do not put credentials in `settings.json`. Authenticate models through Pi, for
 example with `/login <provider>`.
 
 ## Commands
@@ -183,7 +187,7 @@ current response to finish before reloading.
 - **Advisor model not found**: check the configured provider/model with `/model`
   or `pi --list-models`.
 - **No API key configured**: authenticate using `/login <provider>`.
-- **Configuration invalid**: correct the named file/field, then use `/reload`.
+- **Configuration invalid**: correct the named settings namespace/field, then use `/reload`.
 - **Failed to restore original state**: select the intended model manually with
   `/model`; automatic advice has been disabled for safety.
 

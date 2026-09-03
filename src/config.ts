@@ -1,16 +1,13 @@
 /**
  * Advisor configuration for pi-advice.
  *
- * Configuration is loaded from JSON files and merged so a trusted project can
- * override individual fields set globally. Parsing and validation are kept in
- * pure helpers so they can be exercised without touching the filesystem; the
- * file loader only reads bytes and delegates to those helpers.
+ * Configuration is loaded from Pi's namespaced settings objects. Parsing and
+ * validation are kept in pure helpers so they can be exercised without
+ * touching the filesystem; the file loader only creates a SettingsManager and
+ * delegates to those helpers.
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-
-import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, SettingsManager } from "@earendil-works/pi-coding-agent";
 
 import { THINKING_LEVELS, type ThinkingLevel } from "./types.js";
 
@@ -204,66 +201,25 @@ export function validateConfig(
   };
 }
 
-type ReadResult =
-  | { ok: true; present: true; data: unknown }
-  | { ok: true; present: false }
-  | { ok: false; error: string };
-
-function readJsonFile(path: string): ReadResult {
-  if (!existsSync(path)) {
-    return { ok: true, present: false };
-  }
-  let content: string;
-  try {
-    content = readFileSync(path, "utf-8");
-  } catch (err) {
-    return {
-      ok: false,
-      error: `${path}: unable to read config file (${describe(err)})`,
-    };
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content);
-  } catch (err) {
-    return {
-      ok: false,
-      error: `${path}: malformed JSON (${describe(err)})`,
-    };
-  }
-  return { ok: true, present: true, data: parsed };
-}
-
 /**
- * Load and merge advisor configuration from explicit file paths.
+ * Load and merge advisor configuration from Pi settings objects.
  *
- * This is the test seam for config loading: callers provide isolated paths for
- * the global and project files and the trust flag, so tests do not depend on
- * the developer's real home directory.
+ * The settings manager has already parsed each settings file. Each extension
+ * namespace is validated before merging so malformed values and unknown keys in
+ * one source are still reported even when another source overrides that field.
  */
-export function loadConfigFromPaths(
-  globalPath: string,
-  projectPath: string,
+export function loadConfigFromSettings(
+  globalSettings: unknown,
+  projectSettings: unknown,
   isProjectTrusted: boolean,
 ): ConfigResult {
-  const globalRead = readJsonFile(globalPath);
-  if (!globalRead.ok) {
-    return { ok: false, error: globalRead.error };
-  }
-  const globalValidated = globalRead.present
-    ? validateRawConfig(globalRead.data, "global")
+  const globalValidated = validateSettingsNamespace(
+    globalSettings,
+    "global settings",
+  );
+  const projectValidated = isProjectTrusted
+    ? validateSettingsNamespace(projectSettings, "trusted project settings")
     : undefined;
-
-  let projectValidated: ValidatedPartial | undefined;
-  if (isProjectTrusted) {
-    const projectRead = readJsonFile(projectPath);
-    if (!projectRead.ok) {
-      return { ok: false, error: projectRead.error };
-    }
-    projectValidated = projectRead.present
-      ? validateRawConfig(projectRead.data, "project")
-      : undefined;
-  }
 
   const allErrors = [
     ...(globalValidated?.errors ?? []),
@@ -273,38 +229,76 @@ export function loadConfigFromPaths(
     return { ok: false, error: allErrors.join("; ") };
   }
 
-  const merged = mergeConfig(
-    globalValidated as RawAdviceConfig,
-    projectValidated as RawAdviceConfig,
-  );
+  const merged = mergeConfig(globalValidated, projectValidated);
   const sourceLabel = projectValidated
-    ? "merged global + trusted-project"
-    : "global";
+    ? "merged global + trusted-project settings"
+    : "global settings";
   return validateConfig(merged, sourceLabel);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOwn(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+const SETTINGS_KEY = "pi-advice";
+
+function validateSettingsNamespace(
+  settings: unknown,
+  sourceLabel: string,
+): ValidatedPartial | undefined {
+  if (!isRecord(settings)) {
+    return { errors: [`${sourceLabel}: settings must be a JSON object`] };
+  }
+  if (!hasOwn(settings, SETTINGS_KEY)) return undefined;
+  return validateRawConfig(
+    settings[SETTINGS_KEY],
+    `${sourceLabel}.${SETTINGS_KEY}`,
+  );
+}
+
+function formatSettingsErrors(errors: readonly unknown[]): string {
+  return errors
+    .map((entry) => {
+      if (!isRecord(entry)) return `settings: ${describe(entry)}`;
+      const scope = typeof entry.scope === "string" ? entry.scope : "settings";
+      const path = typeof entry.path === "string" ? entry.path : undefined;
+      const error = "error" in entry ? entry.error : entry;
+      return `${path ?? `${scope} settings`}: unable to load settings (${describe(error)})`;
+    })
+    .join("; ");
+}
+
 /**
- * Load and merge advisor configuration.
+ * Load advisor configuration through Pi's SettingsManager.
  *
- * Reads the global file always, and the project file only when the project is
- * trusted. Each source is validated before merging so that malformed values and
- * unknown keys in one file are reported even when the other file would override
- * the same field.
- *
- * Filesystem and JSON errors are returned as an `ok: false` result with a
- * diagnostic string so command handlers can notify concisely instead of
- * throwing. Type/validation errors are likewise returned, not thrown.
+ * Global settings are always loaded. Project settings are included only when
+ * the current project is trusted, matching Pi's normal settings semantics.
  */
 export function loadConfig(
   cwd: string,
   isProjectTrusted: boolean,
 ): ConfigResult {
-  const globalPath = joinPathSafe(getAgentDir(), "pi-advice.json");
-  const projectPath = joinPathSafe(cwd, CONFIG_DIR_NAME, "pi-advice.json");
-  return loadConfigFromPaths(globalPath, projectPath, isProjectTrusted);
-}
-
-/** join() wrapper kept tiny so the getAgentDir() import stays explicit and testable. */
-function joinPathSafe(...segments: string[]): string {
-  return join(...segments);
+  try {
+    const manager = SettingsManager.create(cwd, getAgentDir(), {
+      projectTrusted: isProjectTrusted,
+    });
+    const errors = manager.drainErrors();
+    if (errors.length > 0) {
+      return { ok: false, error: formatSettingsErrors(errors) };
+    }
+    return loadConfigFromSettings(
+      manager.getGlobalSettings(),
+      manager.getProjectSettings(),
+      isProjectTrusted,
+    );
+  } catch (err) {
+    return {
+      ok: false,
+      error: `settings: unable to load settings (${describe(err)})`,
+    };
+  }
 }
