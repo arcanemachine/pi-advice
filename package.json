@@ -1,6 +1,6 @@
 {
   "name": "@arcanemachine/pi-advice",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Step back from current work to reconsider it with a configured model, then continue the same work.",
   "type": "module",
   "keywords": [
@@ -33,7 +33,8 @@
     "src",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE.md"
+    "LICENSE.md",
+    "logo.jpg"
   ],
   "repository": {
     "type": "git",
