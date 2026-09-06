@@ -6,14 +6,16 @@ Commit completed work in this child repository first, then commit the updated
 submodule pointer in the `pi-projects` superproject. Do not push unless the user
 explicitly authorizes it.
 
-## Sanity checks
+## Verification
+
+Run before completion:
 
 ```bash
 npm run format:check
 npm run typecheck
 npm run test
 npm run build
-npm run format
+npm pack --dry-run
 ```
 
 Verify user-facing changes against a running Pi session before release.
