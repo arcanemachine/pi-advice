@@ -26,6 +26,12 @@ export const ADVISOR_WORKING_MESSAGE = "Advising...";
 export const ADVICE_REQUEST_MESSAGE =
   "Requesting advice from the configured advisor...";
 
+function formatAdviceRequestMessage(context: string): string {
+  const trimmed = context.trim();
+  if (trimmed === "") return ADVICE_REQUEST_MESSAGE;
+  return `${ADVICE_REQUEST_MESSAGE} (Extra context: ${JSON.stringify(trimmed)})`;
+}
+
 export type Phase =
   | "idle"
   | "adviceQueued"
@@ -172,7 +178,7 @@ export class AdviceController {
       source: "manual",
     });
     if (outcome === "started") {
-      this.deps.notify(ADVICE_REQUEST_MESSAGE, "info");
+      this.deps.notify(formatAdviceRequestMessage(parsed.context), "info");
     }
   }
 
